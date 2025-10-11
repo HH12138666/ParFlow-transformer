@@ -1,3 +1,6 @@
+# ParFlow-PredFormer
+Replacing traditional ​ParFlow hydrological model​ with ​PredFormer, a large-scale Transformer-based model, for more efficient and generalizable water flow simulation.
+
 
 ## Installation
 
