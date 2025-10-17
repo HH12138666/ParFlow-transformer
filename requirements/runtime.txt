@@ -7,7 +7,7 @@ lpips
 matplotlib
 nni
 netcdf4
-numpy
+numpy==1.26.4
 opencv-python
 packaging
 pandas
