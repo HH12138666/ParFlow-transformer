@@ -10,7 +10,7 @@ model_config = {
     'pre_seq': 12,
     'after_seq': 12,
     # patch size
-    'patch_size': 16,
+    'patch_size': 4,
     'dim': 256, 
     'heads': 8,
     'dim_head': 32,

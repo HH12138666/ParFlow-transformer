@@ -54,7 +54,7 @@ def _read_press_frame(path: str, target_h: int = 144) -> np.ndarray:
     return arr
 
 
-class ParFlowPressSequence(Dataset):
+class ParFlowDataset(Dataset):
     """
     ParFlow press .pfb sequence dataset.
     - Each file is one timestep: (C,H,W) with C=10, H=146, W=252 (we crop to H=144)
@@ -216,7 +216,7 @@ def load_data(batch_size: int,
 
     cfg = kwargs.get('configs', kwargs.get('cfg', None))
 
-    train_ds = ParFlowPressSequence(
+    train_ds = ParFlowDataset(
         data_root=data_root,
         split='train',
         pre_seq_length=pre_seq_length,
@@ -225,7 +225,7 @@ def load_data(batch_size: int,
         cfg=cfg,
     )
     try:
-        val_ds = ParFlowPressSequence(
+        val_ds = ParFlowDataset(
             data_root=data_root,
             split='val',
             pre_seq_length=pre_seq_length,
@@ -234,7 +234,7 @@ def load_data(batch_size: int,
             cfg=cfg,
         )
     except Exception:
-        val_ds = ParFlowPressSequence(
+        val_ds = ParFlowDataset(
             data_root=data_root,
             split='test',
             pre_seq_length=pre_seq_length,
@@ -242,7 +242,7 @@ def load_data(batch_size: int,
             in_shape=in_shape,
             cfg=cfg,
         )
-    test_ds = ParFlowPressSequence(
+    test_ds = ParFlowDataset(
         data_root=data_root,
         split='test',
         pre_seq_length=pre_seq_length,

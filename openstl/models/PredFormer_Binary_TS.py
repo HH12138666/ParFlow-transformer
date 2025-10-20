@@ -165,7 +165,7 @@ class PredFormer_Model(nn.Module):
         
         # Patch Embedding
         x = self.to_patch_embedding(x)
-        
+
         # Posion Embedding
         x += self.pos_embedding.to(x.device)
         
