@@ -5,7 +5,7 @@ dataset_parameters = {
     'pre_seq_length': 12,
     'aft_seq_length': 12,
     'total_length': 24,
-    'data_name': 'parflow_press',
+    'data_name': 'parflow',
     'metrics': ['mse', 'mae', 'ssim', 'psnr'],
     },
 

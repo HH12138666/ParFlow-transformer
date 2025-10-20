@@ -292,7 +292,7 @@ def load_data(batch_size: int,
 
     return train_loader, vali_loader, test_loader
 
-# 还没写完，后续需要修改
+
 
 if __name__ == '__main__':
     dataloader_train, _, dataloader_test = \
@@ -300,12 +300,15 @@ if __name__ == '__main__':
                   val_batch_size=16,
                   data_root='data/',
                   num_workers=4,
-                  pre_seq_length=12, aft_seq_length=12)
+                  pre_seq_length=12,
+                  aft_seq_length=12)
 
     print(len(dataloader_train), len(dataloader_test))
+
     for item in dataloader_train:
         print(item[0].shape, item[1].shape)
         break
+
     for item in dataloader_test:
         print(item[0].shape, item[1].shape)
         break
