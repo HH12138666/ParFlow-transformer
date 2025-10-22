@@ -13,3 +13,7 @@ pip install tensorboard einops
 ```
 
 
+将切到当前仓库根目录（根据你的路径调整为真实绝对路径）
+#在ParFlow-transformer/scripts/parflow/parflow_PredFormer_FacTS_train.sh文件中修改
+REPO=/home/huanghui/data/ParFlow-transformer（根据你的路径调整为真实绝对路径）
+
