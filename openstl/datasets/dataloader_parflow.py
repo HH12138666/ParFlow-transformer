@@ -16,134 +16,193 @@ from .utils import create_loader
 logger = logging.getLogger(__name__)
 
 
-def _natural_key(p: str):
+CROP_H = 128
+CROP_W = 240
+EPS = 1e-6
+
+
+NORMALIZE = True
+NORMALIZE_TARGET = True
+STATS_PATH = None                  # 例如: "/data/stats_128x240.npz"
+STATS_COMPUTE_SAMPLES = 0          # 如设 200 将在线抽样估计
+STATS_TIME_STRIDE = 2
+STATS_SPATIAL_STRIDE = 2
+
+
+
+def _natural_key(p):
     b = os.path.basename(p)
     s = re.split(r'(\d+)', b)
     return [int(t) if t.isdigit() else t for t in s]
 
 
-def _list_pfb_files(root: str) -> List[str]:
+def _list_pfb_files(root) :
     files = sorted(glob.glob(os.path.join(root, '*.pfb')), key=_natural_key)
     if not files:
         raise FileNotFoundError(f'No .pfb files found under: {root}')
     return files
 
 
-def _center_crop_h(arr: np.ndarray, target_h: int) -> np.ndarray:
-    """arr: (C,H,W) -> crop along H to target_h (center-crop)."""
-    C, H, W = arr.shape
-    if H == target_h:
-        return arr
-    if H < target_h:
-        raise ValueError(f'Height {H} < target {target_h}, cannot crop')
-    off = (H - target_h) // 2
-    return arr[:, off:off + target_h, :]
+def _center_crop_h(arr, target_h=CROP_H,target_w=CROP_W) :
+    c, h, w = arr.shape
+    if target_h is not None and h != target_h:
+        dh = h - target_h
+        if dh < 0:
+            raise ValueError(f"Need crop/pad to H={target_h}, but input H={h} < target.")
+        top = dh // 2 
+        arr = arr[:, top:top + target_h, :]
+    if target_w is not None and w != target_w:
+        dw = w - target_w
+        if dw < 0:
+            raise ValueError(f"Need crop/pad to W={target_w}, but input W={w} < target.")
+        left = dw // 2
+        arr = arr[:, :, left:left + target_w]
+    return arr
 
-"""
-Read a single .pfb press file.
-Expected original: [C=10, H=146, W=252]; we center-crop H->144.
-"""
 
-def _read_press_frame(path: str, target_h: int = 144) -> np.ndarray:
+
+def _read_press_frame(path, target_h=CROP_H, target_w=CROP_W) :
 
     arr = read_pfb(get_absolute_path(path)).astype(np.float32)  # (C,H,W)
     if arr.ndim != 3:
         raise ValueError(f'Expected 3D array per .pfb, got shape {arr.shape} for {path}')
-    
-    arr = _center_crop_h(arr, target_h=target_h)
+
+    arr = _center_crop_h(arr, target_h=target_h, target_w = target_w)  
     return arr
+
+#计算均值和方差
+def _welford_update(count, mean, M2, batch_mean, batch_M2, batch_n):
+    total_n = count + batch_n
+    delta = batch_mean - mean
+    mean += delta * (batch_n / np.maximum(total_n, 1))
+    M2 += batch_M2 + (delta * delta) * (count * batch_n / np.maximum(total_n, 1))
+    count[:] = total_n
+    return count, mean, M2
+
+def compute_mean_std(files,
+                    target_h=CROP_H,
+                    target_w=CROP_W,
+                    spatial_stride=1,
+                    time_stride=1,
+                    max_files=None,
+                    channels=None):
+    sel_files = files[::max(1, int(time_stride))]
+    if max_files is not None:
+        sel_files = sel_files[:int(max_files)]
+    a0 = _read_press_frame(sel_files[0], target_h, target_w)
+    if channels is not None:
+        a0 = a0[channels, ...]
+    if spatial_stride > 1:
+        a0 = a0[:, ::spatial_stride, ::spatial_stride]
+    C = a0.shape[0]
+    count = np.zeros(C, dtype=np.float64)
+    mean  = np.zeros(C, dtype=np.float64)
+    M2    = np.zeros(C, dtype=np.float64)
+    for f in sel_files:
+        a = _read_press_frame(f, target_h, target_w)
+        if channels is not None:
+            a = a[channels, ...]
+        if spatial_stride > 1:
+            a = a[:, ::spatial_stride, ::spatial_stride]
+        x = a.reshape(C, -1).astype(np.float64, copy=False)
+        b_mean = x.mean(axis=1)
+        diff   = x - b_mean[:, None]
+        b_M2   = (diff * diff).sum(axis=1)
+        b_n    = x.shape[1]
+        _welford_update(count, mean, M2, b_mean, b_M2, b_n)
+    var = M2 / np.maximum(count, 1.0)
+    std = np.sqrt(var)
+    return mean.astype(np.float32), std.astype(np.float32)
+
+#增强数据
+def augment_pair(X, Y,
+                 p_flip_h=0.5,
+                 p_flip_w=0.5,
+                 p_noise=0.2,
+                 noise_sigma=0.01):
+    
+    if torch.rand(1).item() < p_flip_h:
+        X = X.flip(-2)
+        Y = Y.flip(-2)
+    if torch.rand(1).item() < p_flip_w:
+        X = X.flip(-1)
+        Y = Y.flip(-1)
+    if torch.rand(1).item() < p_noise:
+        X = X + torch.randn_like(X) * float(noise_sigma)
+    return X, Y
 
 
 class ParFlowDataset(Dataset):
-    """
-    ParFlow press .pfb sequence dataset.
-    - Each file is one timestep: (C,H,W) with C=10, H=146, W=252 (we crop to H=144)
-    - Return sliding windows:
-        X: [pre, C=10, H=144, W=252]
-        Y: [aft, C=10, H=144, W=252]
-    """
-    def __init__(
-        self,
-        data_root: str,
-        split: str,
-        pre_seq_length: int,
-        aft_seq_length: int,
-        in_shape: Optional[List[int]] = None,
-        cfg=None,                   # optional explicit time ranges/strides
-        compute_stats_samples: int = 100,
-    ):
+
+    def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape: Optional[List[int]] = None,stride=1,use_augment=False):
         super().__init__()
-        assert split in ('train', 'val', 'validation', 'valid', 'test')
-        self.split = 'val' if split in ('val', 'validation', 'valid') else split
+        split = str(split).lower()
+        if split not in ('train', 'val', 'test'):
+            raise ValueError(f"Invalid split: {split}. Expected 'train' | 'val' | 'test'.")
+        self.split = split
+
         self.root = data_root
         self.pre = pre_seq_length
         self.aft = aft_seq_length
         self.total = self.pre + self.aft
-        self.cfg = cfg
+        self.use_augment = use_augment
 
-        # enumerate frames
+
         self.files = _list_pfb_files(self.root)
         self.num_frames = len(self.files)
 
-        # infer shape (after crop)
+        
+         
         if in_shape is not None and len(in_shape) == 4:
             _, C, H, W = in_shape
             # 强制对齐为 10×144×252
             C = 10
-            H = 144
-            W = 252
+            H = 128
+            W = 240
         else:
             sample = _read_press_frame(self.files[0], target_h=144)
             C, H, W = sample.shape
-        self.C, self.H, self.W = C, H, W   # 期望 10,144,252
+        self.C, self.H, self.W = C, H, W   
 
-        # build split indices
-        self.start_indices = self._build_time_indices()
 
-        # estimate per-channel mean/std (用于标准化)
-        self.mean, self.std = self._estimate_mean_std(self.files, samples=compute_stats_samples)
+        self.start_indices = self._build_time_indices(stride=max(1, int(stride)))
 
-        # metadata for OpenSTL
-        self.data_name = 'parflow_press'
-        self.mean_t = torch.from_numpy(self.mean).view(1, self.C, 1, 1).float()
-        self.std_t  = torch.from_numpy(self.std ).view(1, self.C, 1, 1).float()
-    """
-    Priority 1: cfg.training_* / test_* / (val_*) + stride
-    Priority 2: ratio split 70/15/15 with stride=1
-    """
-    def _build_time_indices(self) -> List[int]:
 
-        if self.cfg is not None:
-            try:
-                if self.split == 'train':
-                    start = int(self.cfg.training_start_step)
-                    end   = int(self.cfg.training_end_step)
-                    stride = int(getattr(self.cfg, 'st_stride_train', 1))
-                else:
-                    start = int(self.cfg.test_start_step) if self.split == 'test' else int(getattr(self.cfg, 'val_start_step', 0))
-                    if self.split == 'val' and not hasattr(self.cfg, 'val_end_step'):
-                        raise AttributeError
-                    end   = int(self.cfg.test_end_step) if self.split == 'test' else int(self.cfg.val_end_step)
-                    stride = int(getattr(self.cfg, 'st_stride_test', 1))
-                start = max(0, start)
-                end = min(self.num_frames - 1, end)
-                max_start = end - self.total + 1
-                if max_start < start:
-                    raise ValueError(f'Not enough frames: start={start}, end={end}, total={self.total}')
-                return list(range(start, max_start + 1, stride))
-            except Exception:
-                pass
+        self.mean = None
+        self.std  = None
 
+        if NORMALIZE:
+            if STATS_PATH and os.path.exists(STATS_PATH):
+                data = np.load(STATS_PATH)
+                self.mean = np.asarray(data['mean'], dtype=np.float32).reshape(-1)
+                self.std  = np.asarray(data['std'],  dtype=np.float32).reshape(-1)
+                if self.mean.shape[0] != self.C or self.std.shape[0] != self.C:
+                    raise ValueError(f"Stats mismatch: stats C={self.mean.shape[0]} vs dataset C={self.C}.")
+            elif STATS_COMPUTE_SAMPLES and STATS_COMPUTE_SAMPLES > 0:
+                self.mean, self.std = compute_mean_std(
+                    self.files,
+                    target_h=128, target_w=240,
+                    spatial_stride=STATS_SPATIAL_STRIDE,
+                    time_stride=STATS_TIME_STRIDE,
+                    max_files=STATS_COMPUTE_SAMPLES,
+                    channels=None
+                )
+            else:
+                self.mean = np.zeros((self.C,), dtype=np.float32)
+                self.std  = np.ones((self.C,), dtype=np.float32)
+
+        self.mean_t = torch.from_numpy(self.mean).view(1, self.C, 1, 1).float() if self.mean is not None else None
+        self.std_t  = torch.from_numpy(self.std ).view(1, self.C, 1, 1).float() if self.std  is not None else None
+
+    def _build_time_indices(self, stride=1):
         n_train = int(self.num_frames * 0.70)
         n_val   = int(self.num_frames * 0.15)
-
         def build_range(s, e):
             e = e - 1
             max_start = e - self.total + 1
             if max_start < s:
                 return []
-            return list(range(s, max_start + 1, 1))
-
+            return list(range(s, max_start + 1, stride))
         if self.split == 'train':
             return build_range(0, n_train)
         elif self.split == 'val':
@@ -151,107 +210,55 @@ class ParFlowDataset(Dataset):
         else:
             return build_range(n_train + n_val, self.num_frames)
 
-
-    def _estimate_mean_std(self, paths: List[str], samples: int = 100) -> Tuple[np.ndarray, np.ndarray]:
-        n = min(samples, len(paths))
-        if n <= 0:
-            return np.zeros((self.C,), dtype=np.float32), np.ones((self.C,), dtype=np.float32)
-        idxs = np.linspace(0, len(paths) - 1, n, dtype=int)
-
-        sum_m = np.zeros((self.C,), dtype=np.float64)
-        sum_ex2 = np.zeros((self.C,), dtype=np.float64)
-        for i in idxs:
-            arr = _read_press_frame(paths[i], target_h=144)  # (C,144,252)
-            x = arr.reshape(self.C, -1)
-            m = x.mean(axis=1)
-            ex2 = (x**2).mean(axis=1)
-            sum_m += m
-            sum_ex2 += ex2
-        mean = (sum_m / n).astype(np.float32)
-        ex2  = (sum_ex2 / n).astype(np.float32)
-        std = np.sqrt(np.maximum(ex2 - mean**2, 1e-12)).astype(np.float32)
-        std[std < 1e-6] = 1.0
-        return mean, std
-
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.start_indices)
 
-    def _read_window(self, t0: int) -> torch.Tensor:
+    def _read_window(self, t0):
         T = self.total
         out = torch.empty((T, self.C, self.H, self.W), dtype=torch.float32)
-        mean = torch.from_numpy(self.mean).view(self.C, 1, 1)
-        std  = torch.from_numpy(self.std ).view(self.C, 1, 1)
         for i in range(T):
             path = self.files[t0 + i]
-            arr = _read_press_frame(path, target_h=144)   # (10,144,252)
-            ten = torch.from_numpy(arr)
-            ten = (ten - mean) / std
-            out[i] = ten
+            arr = _read_press_frame(path, target_h=CROP_H, target_w=CROP_W)
+            out[i] = torch.from_numpy(arr)
         return out
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         t0 = self.start_indices[idx]
-        win = self._read_window(t0)  # [T, 10, 144, 252]
+        win = self._read_window(t0)  # [T, C, 128, 240]
         x = win[: self.pre]
         y = win[self.pre : self.pre + self.aft]
+
+        if self.use_augment and self.split == 'train':
+            x, y = augment_pair(x, y)
+
+        if NORMALIZE and self.mean_t is not None and self.std_t is not None:
+            x = (x - self.mean_t) / (self.std_t + EPS)
+            if NORMALIZE_TARGET:
+                y = (y - self.mean_t) / (self.std_t + EPS)
+
         return x, y
 
-    """
-    Create train/val/test loaders for ParFlow press .pfb sequences (C=10, H->144, W=252).
-    data_root: directory containing 00000.pfb ... 08760.pfb
 
-    """
-def load_data(batch_size: int,
-              val_batch_size: int,
-              data_root: str,
-              num_workers: int,
-              pre_seq_length: int = 12,
-              aft_seq_length: int = 12,
+def load_data(batch_size,
+              val_batch_size,
+              data_root,
+              num_workers,
+              pre_seq_length = 9,
+              aft_seq_length = 1,
               in_shape: Optional[List[int]] = None,
-              distributed: bool = False,
-              use_augment: bool = False,
-              use_prefetcher: bool = False,
-              drop_last: bool = False,
-              **kwargs):
-
-    cfg = kwargs.get('configs', kwargs.get('cfg', None))
-
-    train_ds = ParFlowDataset(
-        data_root=data_root,
-        split='train',
-        pre_seq_length=pre_seq_length,
-        aft_seq_length=aft_seq_length,
-        in_shape=in_shape,
-        cfg=cfg,
-    )
+              distributed = False,
+              use_augment = True,
+              use_prefetcher = False,
+              drop_last = False,
+              stride=1):
+    train_ds = ParFlowDataset(data_root, 'train', pre_seq_length, aft_seq_length,in_shape=in_shape,stride=stride, use_augment=use_augment)
     try:
-        val_ds = ParFlowDataset(
-            data_root=data_root,
-            split='val',
-            pre_seq_length=pre_seq_length,
-            aft_seq_length=aft_seq_length,
-            in_shape=in_shape,
-            cfg=cfg,
-        )
+        val_ds = ParFlowDataset(data_root, 'val', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
     except Exception:
-        val_ds = ParFlowDataset(
-            data_root=data_root,
-            split='test',
-            pre_seq_length=pre_seq_length,
-            aft_seq_length=aft_seq_length,
-            in_shape=in_shape,
-            cfg=cfg,
-        )
-    test_ds = ParFlowDataset(
-        data_root=data_root,
-        split='test',
-        pre_seq_length=pre_seq_length,
-        aft_seq_length=aft_seq_length,
-        in_shape=in_shape,
-        cfg=cfg,
-    )
+        val_ds = ParFlowDataset(data_root, 'test', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
+    test_ds = ParFlowDataset(data_root, 'test', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
 
-    input_channels = train_ds.C  # 10
+    input_channels = train_ds.C
 
     train_loader = create_loader(
         train_ds,
@@ -293,15 +300,14 @@ def load_data(batch_size: int,
     return train_loader, vali_loader, test_loader
 
 
-
 if __name__ == '__main__':
     dataloader_train, _, dataloader_test = \
-        load_data(batch_size=16,
-                  val_batch_size=16,
+        load_data(batch_size=64,
+                  val_batch_size=64,
                   data_root='data/',
                   num_workers=4,
-                  pre_seq_length=12,
-                  aft_seq_length=12)
+                  pre_seq_length=9,
+                  aft_seq_length=1)
 
     print(len(dataloader_train), len(dataloader_test))
 
@@ -312,3 +318,5 @@ if __name__ == '__main__':
     for item in dataloader_test:
         print(item[0].shape, item[1].shape)
         break
+
+

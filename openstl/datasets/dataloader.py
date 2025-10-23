@@ -1,7 +1,7 @@
 def load_data(dataname, batch_size, val_batch_size, num_workers, data_root, dist=False, **kwargs):
     cfg_dataloader = dict(
-        pre_seq_length=kwargs.get('pre_seq_length', 12),
-        aft_seq_length=kwargs.get('aft_seq_length', 12),
+        pre_seq_length=kwargs.get('pre_seq_length', 9),
+        aft_seq_length=kwargs.get('aft_seq_length', 1),
         in_shape=kwargs.get('in_shape', None),
         distributed=dist,
         use_augment=kwargs.get('use_augment', False),

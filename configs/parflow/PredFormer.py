@@ -2,15 +2,15 @@ method = 'PredFormer'
 
 model_config = {
     # press h w c
-    'height': 144,
-    'width': 252,
+    'height': 128,
+    'width': 240,
     'num_channels': 10,
     
     # video length in and out
-    'pre_seq': 12,
-    'after_seq': 12,
+    'pre_seq': 9,
+    'after_seq': 1,
     # patch size
-    'patch_size': 4,
+    'patch_size': 8,
     'dim': 256, 
     'heads': 8,
     'dim_head': 32,

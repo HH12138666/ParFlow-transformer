@@ -2,3 +2,4 @@ data/
 logs_tb/
 work_dirs/
 output.log
+nohup.out
