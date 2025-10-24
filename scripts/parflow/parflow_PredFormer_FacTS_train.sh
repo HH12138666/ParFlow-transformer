@@ -25,3 +25,5 @@ python tools/train.py \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
     --tb_dir logs_tb/03_08
+
+# nohup bash /home/huanghui/data/ParFlow-transformer/scripts/parflow/parflow_PredFormer_FacTS_train.sh > "train_log_2$(date +'%Y%m%d_%H%M%S').log" 2>&1 &

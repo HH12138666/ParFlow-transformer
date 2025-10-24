@@ -3,3 +3,4 @@ logs_tb/
 work_dirs/
 output.log
 nohup.out
+train_log_*

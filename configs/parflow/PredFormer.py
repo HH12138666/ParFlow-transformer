@@ -4,7 +4,7 @@ model_config = {
     # press h w c
     'height': 128,
     'width': 240,
-    'num_channels': 10,
+    'num_channels': 7,
     
     # video length in and out
     'pre_seq': 9,
@@ -20,6 +20,6 @@ model_config = {
     'drop_path': 0.25,
     'scale_dim': 2,
     # depth
-    'depth': 1,
-    'Ndepth': 2, # For FullAttention-8, for BinaryST, BinaryST, FacST, FacTS-4, for TST,STS-3, for TSST, STTS-2
+    'depth': 2,
+    'Ndepth': 4, # For FullAttention-8, for BinaryST, BinaryST, FacST, FacTS-4, for TST,STS-3, for TSST, STTS-2
 }

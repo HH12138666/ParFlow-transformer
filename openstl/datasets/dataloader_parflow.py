@@ -3,7 +3,6 @@ import re
 import glob
 import logging
 from typing import List, Optional, Tuple
-
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -21,13 +20,14 @@ CROP_W = 240
 EPS = 1e-6
 
 
-NORMALIZE = True
-NORMALIZE_TARGET = True
-STATS_PATH = None                  # 例如: "/data/stats_128x240.npz"
-STATS_COMPUTE_SAMPLES = 0          # 如设 200 将在线抽样估计
-STATS_TIME_STRIDE = 2
-STATS_SPATIAL_STRIDE = 2
-
+NORMALIZE = False
+NORMALIZE_TARGET = False
+STATS_PATH = None                  # 存放均值和方差的路径，如设 None 则不加载
+STATS_COMPUTE_SAMPLES = 0          # 计算均值和方差时使用的样本数量，如设 0 则不计算
+STATS_TIME_STRIDE = 1
+STATS_SPATIAL_STRIDE = 1
+MAX_FILES = None                    # 设为 None 表示使用全部文件；也可以设为 100 只用前100个
+CHANNELS = None                     # 设为 None 表示使用所有通道；也可以设为 [0] 只计算第0通道
 
 
 def _natural_key(p):
@@ -64,6 +64,8 @@ def _center_crop_h(arr, target_h=CROP_H,target_w=CROP_W) :
 def _read_press_frame(path, target_h=CROP_H, target_w=CROP_W) :
 
     arr = read_pfb(get_absolute_path(path)).astype(np.float32)  # (C,H,W)
+    #修改
+    arr = arr[0:7, :, :]  # 只取前7个通道
     if arr.ndim != 3:
         raise ValueError(f'Expected 3D array per .pfb, got shape {arr.shape} for {path}')
 
@@ -118,7 +120,7 @@ def compute_mean_std(files,
 def augment_pair(X, Y,
                  p_flip_h=0.5,
                  p_flip_w=0.5,
-                 p_noise=0.2,
+                 p_noise=0.1,
                  noise_sigma=0.01):
     
     if torch.rand(1).item() < p_flip_h:
@@ -151,19 +153,10 @@ class ParFlowDataset(Dataset):
         self.files = _list_pfb_files(self.root)
         self.num_frames = len(self.files)
 
-        
-         
-        if in_shape is not None and len(in_shape) == 4:
-            _, C, H, W = in_shape
-            # 强制对齐为 10×144×252
-            C = 10
-            H = 128
-            W = 240
-        else:
-            sample = _read_press_frame(self.files[0], target_h=144)
-            C, H, W = sample.shape
-        self.C, self.H, self.W = C, H, W   
-
+        sample = _read_press_frame(self.files[0], target_h=CROP_H, target_w=CROP_W)
+        C, H, W = sample.shape
+        self.C, self.H, self.W = 7, H, W   
+        # 修改
 
         self.start_indices = self._build_time_indices(stride=max(1, int(stride)))
 
@@ -301,9 +294,11 @@ def load_data(batch_size,
 
 
 if __name__ == '__main__':
+    '''
+    # 检查数据加载器
     dataloader_train, _, dataloader_test = \
-        load_data(batch_size=64,
-                  val_batch_size=64,
+        load_data(batch_size=1,
+                  val_batch_size=1,
                   data_root='data/',
                   num_workers=4,
                   pre_seq_length=9,
@@ -314,9 +309,67 @@ if __name__ == '__main__':
     for item in dataloader_train:
         print(item[0].shape, item[1].shape)
         break
-
     for item in dataloader_test:
         print(item[0].shape, item[1].shape)
         break
+    '''
+
+
+    '''
+    检查各个通道的均值和方差计算是否正确
+    import pandas as  pd
+
+    batch = next(iter(dataloader_train))
+    x,y = batch
+    # print(x[0,0,0,:,:])
+    
+    pdf = pd.DataFrame(x[0,0,0,:,:].numpy())
+    pdf.to_csv("press_pfb_channel_0_augmented.csv",index=False,header=False)
+
+    for i in range(x.shape[1]):
+        for j in range(x.shape[2]):
+            n = x[0,i,j,:,:].numpy().flatten()
+            print(f"===== 第 {i} 个时间步，第 {j} 个通道 =====")
+            print(f"最小值: {n.min():.2f}, 最大值: {n.max():.2f}, 均值: {n.mean():.2f}")
+    '''
+
+    '''
+    # 计算均值和方差
+    mean, std = compute_mean_std(
+        files = _list_pfb_files('data/')
+    )
+    print("=== 每个通道的 Mean 和 Std ===")
+    C = mean.shape[0]
+    for c in range(C):
+        print(f"Channel {c}: Mean = {mean[c]:.6f}, Std = {std[c]:.6f}")
+    '''
+
+
+    # 统计 Channel 的最大值、最小值、均值、标准差
+    for c in range(7, 10):  # 假设有10个通道
+        all_channel_data = []
+        files = _list_pfb_files('data/')
+        for file in files:
+            data = _read_press_frame(file)
+            all_channel_data.append(data[c, :, :].flatten())
+            
+        all_channel_data = np.array(all_channel_data)
+        max_per_sample = [arr.max() for arr in all_channel_data]
+        min_per_sample = [arr.min() for arr in all_channel_data]
+        print(f"Channel {c} 的最大值为：", max(max_per_sample))
+        print(f"Channel {c} 的最小值为：", min(min_per_sample))
+        print(f"Channel {c} 异常样本数（比如最大值 > 100）：", sum(v > 100 for v in max_per_sample))
+        print(f"Channel {c} 异常样本数（比如最小值 < -100）：", sum(v < -100 for v in min_per_sample))
+        mean_c = np.mean(np.concatenate(all_channel_data))
+        std_c = np.std(np.concatenate(all_channel_data))
+        print(f"Channel {c} 的均值为：", mean_c)    
+        print(f"Channel {c} 的标准差为：", std_c)
+
+    '''
+    files = _list_pfb_files('data/')
+    print(f"🔍 总共读取了 {len(files)} 个 .pfb 文件")
+    '''
+# python /home/huanghui/data/ParFlow-transformer/openstl/datasets/dataloader_parflow.py
+
 
 
