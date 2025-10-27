@@ -135,9 +135,31 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
     Returns:
         dict: evaluation results
     """
+    
+    #修改
+    if mean is not None and std is not None:
+        # 自动调整 mean 和 std 的 shape，以匹配 pred 的通道维度
+        if pred.ndim >= 3:
+            
+            C_pred = pred.shape[2]  
+            C_mean = mean.shape[0]  
+
+            if C_pred == C_mean:
+                
+                mean = mean.reshape(1, 1, -1, 1, 1)  # shape -> (1, 1, 7, 1, 1)
+                std  = std.reshape(1, 1, -1, 1, 1)   # shape -> (1, 1, 7, 1, 1)
+            else:
+                raise ValueError(f"Channel count mismatch: pred has {C_pred} channels, mean/std has {C_mean} channels.")
+        # 🔧 新增结束
+
+        # 现在可以安全地做反标准化
+        pred = pred * std + mean
+        true = true * std + mean
+    '''
     if mean is not None and std is not None:
         pred = pred * std + mean
         true = true * std + mean
+    '''
     eval_res = {}
     eval_log = ""
     allowed_metrics = ['mae', 'mse', 'rmse', 'ssim', 'psnr', 'snr', 'lpips']

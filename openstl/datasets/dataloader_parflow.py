@@ -20,9 +20,9 @@ CROP_W = 240
 EPS = 1e-6
 
 
-NORMALIZE = False
-NORMALIZE_TARGET = False
-STATS_PATH = None                  # 存放均值和方差的路径，如设 None 则不加载
+NORMALIZE = True
+NORMALIZE_TARGET = True
+STATS_PATH = './stats.npz'                   # 存放均值和方差的路径，如设 None 则不加载
 STATS_COMPUTE_SAMPLES = 0          # 计算均值和方差时使用的样本数量，如设 0 则不计算
 STATS_TIME_STRIDE = 1
 STATS_SPATIAL_STRIDE = 1
@@ -120,8 +120,8 @@ def compute_mean_std(files,
 def augment_pair(X, Y,
                  p_flip_h=0.5,
                  p_flip_w=0.5,
-                 p_noise=0.1,
-                 noise_sigma=0.01):
+                 p_noise=0.2,
+                 noise_sigma=0.001):
     
     if torch.rand(1).item() < p_flip_h:
         X = X.flip(-2)
@@ -333,7 +333,7 @@ if __name__ == '__main__':
             print(f"最小值: {n.min():.2f}, 最大值: {n.max():.2f}, 均值: {n.mean():.2f}")
     '''
 
-    '''
+    
     # 计算均值和方差
     mean, std = compute_mean_std(
         files = _list_pfb_files('data/')
@@ -342,9 +342,10 @@ if __name__ == '__main__':
     C = mean.shape[0]
     for c in range(C):
         print(f"Channel {c}: Mean = {mean[c]:.6f}, Std = {std[c]:.6f}")
+    # np.savez(STATS_PATH, mean=mean, std=std)  # 保存为 stats.npz 文件
+    # print(f"✅ 均值和方差已保存到：{STATS_PATH}")
+
     '''
-
-
     # 统计 Channel 的最大值、最小值、均值、标准差
     for c in range(7, 10):  # 假设有10个通道
         all_channel_data = []
@@ -364,6 +365,8 @@ if __name__ == '__main__':
         std_c = np.std(np.concatenate(all_channel_data))
         print(f"Channel {c} 的均值为：", mean_c)    
         print(f"Channel {c} 的标准差为：", std_c)
+    '''
+
 
     '''
     files = _list_pfb_files('data/')
