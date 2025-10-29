@@ -14,7 +14,7 @@ def get_version():
         exec(compile(f.read(), version_file, 'exec'))
     return locals()['__version__']
 
-
+# 该函数用于解析项目依赖文件并返回一个依赖项列表。
 def parse_requirements(fname='requirements.txt', with_version=True):
     """
     Parse the package dependencies listed in a requirements file but strips
@@ -58,8 +58,6 @@ def parse_requirements(fname='requirements.txt', with_version=True):
                 if len(parts) > 1:
                     op, rest = parts[1:]
                     if ';' in rest:
-                        # Handle platform specific dependencies
-                        # http://setuptools.readthedocs.io/en/latest/setuptools.html#declaring-platform-specific-dependencies
                         version, platform_deps = map(str.strip,
                                                      rest.split(';'))
                         info['platform_deps'] = platform_deps

@@ -56,7 +56,12 @@ class Base_method(object):
 
     def _build_model(self, **kwargs):
         raise NotImplementedError
+    
+    #修改 compute physical loss for denormalized data if needed
+    def _compute_logging_loss(self, pred_y, batch_y, dataset):
+        """Compute the loss used for logging/monitoring."""
 
+        return self.criterion(pred_y, batch_y)
     def _init_optimizer(self, steps_per_epoch):
         return get_optim_scheduler(
             self.args, self.args.epoch, self.model, steps_per_epoch)
@@ -123,7 +128,9 @@ class Base_method(object):
                 eval_res, _ = metric(pred_y.cpu().numpy(), batch_y.cpu().numpy(),
                                      data_loader.dataset.mean, data_loader.dataset.std,
                                      metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
-                eval_res['loss'] = self.criterion(pred_y, batch_y).cpu().numpy()
+                #修改 compute logging loss
+                eval_res['loss'] = self._compute_logging_loss(
+                    pred_y, batch_y, data_loader.dataset).cpu().numpy()
                 for k in eval_res.keys():
                     eval_res[k] = eval_res[k].reshape(1)
                 results.append(eval_res)
@@ -172,7 +179,9 @@ class Base_method(object):
                 eval_res, _ = metric(pred_y.cpu().numpy(), batch_y.cpu().numpy(),
                                      data_loader.dataset.mean, data_loader.dataset.std,
                                      metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
-                eval_res['loss'] = self.criterion(pred_y, batch_y).cpu().numpy()
+                #修改 compute logging loss
+                eval_res['loss'] = self._compute_logging_loss(
+                    pred_y, batch_y, data_loader.dataset).cpu().numpy()
                 for k in eval_res.keys():
                     eval_res[k] = eval_res[k].reshape(1)
                 results.append(eval_res)
