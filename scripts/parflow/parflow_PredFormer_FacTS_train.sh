@@ -16,7 +16,8 @@ python tools/train.py \
     --data_root data \
     --res_dir work_dirs \
     --batch_size 10 \
-    --epoch 50 \
+    --val_batch_size 10 \
+    --epoch 30 \
     --overwrite \
     --lr 5e-4 \
     --sched cosine \
@@ -24,6 +25,12 @@ python tools/train.py \
     --opt adamw \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
-    --tb_dir logs_tb/03_08
+    --tb_dir logs_tb/03_08 \
+    # metrics
+    --metrics mse mae \
+    # mean and std for normalization
+    --mean 320.9309 123.27885 53.482414 21.529709 7.8458643 2.342689 0.40309316 \
+    --std 49.292667 38.47684 24.06772 12.508097 5.8830347 2.8203301 1.3178533
+    # --dist
 
 # nohup bash /home/huanghui/data/ParFlow-transformer/scripts/parflow/parflow_PredFormer_FacTS_train.sh > "train_log_2$(date +'%Y%m%d_%H%M%S').log" 2>&1 &

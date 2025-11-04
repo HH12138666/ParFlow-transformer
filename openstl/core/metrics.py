@@ -119,21 +119,21 @@ class LPIPS(torch.nn.Module):
 def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
            clip_range=[0, 1], channel_names=None,
            spatial_norm=False, return_log=True):
-    """The evaluation function to output metrics.
+    """评估函数，用于输出各种评估指标。
 
-    Args:
-        pred (tensor): The prediction values of output prediction.
-        true (tensor): The prediction values of output prediction.
-        mean (tensor): The mean of the preprocessed video data.
-        std (tensor): The std of the preprocessed video data.
-        metric (str | list[str]): Metrics to be evaluated.
-        clip_range (list): Range of prediction to prevent overflow.
-        channel_names (list | None): The name of different channels.
-        spatial_norm (bool): Weather to normalize the metric by HxW.
-        return_log (bool): Whether to return the log string.
+    参数:
+        pred (tensor): 模型的预测值（输出结果）。
+        true (tensor): 真实值（Ground Truth，即真实的目标值）。
+        mean (tensor): 预处理后的视频数据的均值。
+        std (tensor): 预处理后的视频数据的标准差。
+        metric (str | list[str]): 需要评估的指标，可以是一个字符串（单个指标）或字符串列表（多个指标）。
+        clip_range (list): 用于防止数值溢出的预测值范围（比如将预测值限制在某个区间内）。
+        channel_names (list | None): 不同通道的名称（比如多通道数据中每个通道的名称）。如果为 None，则表示没有通道名称。
+        spatial_norm (bool): 是否基于空间维度（高度 H 和宽度 W）对指标进行归一化。默认为 False。
+        return_log (bool): 是否返回一个包含评估结果的日志字符串。如果为 True，则返回评估结果的文本描述。
 
-    Returns:
-        dict: evaluation results
+    返回值:
+        dict: 包含各项评估指标结果的字典。
     """
     
     #修改

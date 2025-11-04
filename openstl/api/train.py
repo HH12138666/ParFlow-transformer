@@ -43,6 +43,9 @@ class BaseExperiment(object):
         self._world_size = 1
         self._dist = self.args.dist
         self._early_stop = self.args.early_stop_epoch
+        # 修改
+        self.mean = self.args.mean
+        self.std = self.args.std
 
         # Initialize TensorBoard SummaryWriter
         if self._rank == 0:     
@@ -376,15 +379,22 @@ class BaseExperiment(object):
         self.call_hook('before_val_epoch')
         results = self.method.test_one_epoch(self, self.test_loader)
         self.call_hook('after_val_epoch')
-
-        if 'weather' in self.args.dataname:
+        # 修改 metric_list, spatial_norm = self.args.metrics, False（原本）
+        if 'parflow' in self.args.dataname:
             metric_list, spatial_norm = self.args.metrics, True
-            channel_names = self.test_loader.dataset.data_name if 'mv' in self.args.dataname else None
+            channel_names = None
+            # channel_names = self.test_loader.dataset.data_name if 'mv' in self.args.dataname else None
         else:
-            metric_list, spatial_norm, channel_names = self.args.metrics, False, None
+            #metric_list, spatial_norm, channel_names = self.args.metrics, False, None(原本)
+            metric_list, spatial_norm, channel_names = self.args.metrics, True, None
         eval_res, eval_log = metric(results['preds'], results['trues'],
+                                    self.mean, self.std,
+                                    metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
+        # 修改
+        '''eval_res, eval_log = metric(results['preds'], results['trues'],
                                     self.test_loader.dataset.mean, self.test_loader.dataset.std,
                                     metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
+        '''
         results['metrics'] = np.array([eval_res['mae'], eval_res['mse']])
 
         if self._rank == 0:

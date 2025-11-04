@@ -48,12 +48,12 @@ def create_parser():
                         help='port only works when launcher=="slurm"')
 
     # dataset parameters
-    parser.add_argument('--batch_size', '-b', default=16, type=int, help='Training batch size')
-    parser.add_argument('--val_batch_size', '-vb', default=16, type=int, help='Validation batch size')
+    parser.add_argument('--batch_size', '-b', default=10, type=int, help='Training batch size')
+    parser.add_argument('--val_batch_size', '-vb', default=10, type=int, help='Validation batch size')
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--data_root', default='./data')
-    parser.add_argument('--dataname', '-d', default='mmnist', type=str,
-                        help='Dataset name (default: "mmnist")')
+    parser.add_argument('--dataname', '-d', default='parflow', type=str,
+                        help='Dataset name (default: "parflow")')
     parser.add_argument('--pre_seq_length', default=None, type=int, help='Sequence length before prediction')
     parser.add_argument('--aft_seq_length', default=None, type=int, help='Sequence length after prediction')
     parser.add_argument('--total_length', default=None, type=int, help='Total Sequence length for prediction')
@@ -72,7 +72,7 @@ def create_parser():
                                  'SimVP', 'simvp', 'TAU', 'tau','STGame','stgame','STPara','stpara','stmamba','STMamba',
                                  'syncformer','SyncFormer', 'syncformer_ablation', 'SyncFormer_Ablation','quadformer','QuadFormer','mam','MAM'],
                         help='Name of video prediction method to train (default: "SimVP")')
-    parser.add_argument('--config_file', '-c', default='configs/mmnist/simvp/SimVP_gSTA.py', type=str,
+    parser.add_argument('--config_file', '-c', default='configs/parflow/PredFormer.py', type=str,
                         help='Path to the default config file')
     parser.add_argument('--model_type', default=None, type=str,
                         help='Name of model for SimVP (default: None)')
@@ -139,7 +139,11 @@ def create_parser():
                         help='Mode for applying drop path rate scheduling: "standard", "early", or "late"')
     parser.add_argument('--drop_schedule', default='constant', type=str, choices=['constant', 'linear'],
                         help='Schedule for drop path rate in early mode: "constant" or "linear"')
-
+    # Mean and Std parameters
+    parser.add_argument('--mean', type=float, nargs='+', default=None,
+                        help='Mean values for data normalization')  
+    parser.add_argument('--std', type=float, nargs='+', default=None,
+                        help='Standard deviation values for data normalization')
     return parser
 
 
@@ -174,7 +178,7 @@ def default_parser():
         'val_batch_size': 16,
         'num_workers': 4,
         'data_root': './data',
-        'dataname': 'mmnist',
+        'dataname': 'parflow',
         'pre_seq_length': 10,
         'aft_seq_length': 10,
         'total_length': 20,
@@ -183,7 +187,7 @@ def default_parser():
         'drop_last': False,
         # method parameters
         'method': 'SimVP',
-        'config_file': 'configs/mmnist/simvp/SimVP_gSTA.py',
+        'config_file': 'configs/parflow/PredFormer.py',
         'model_type': 'gSTA',
         'drop': 0,
         'drop_path': 0,

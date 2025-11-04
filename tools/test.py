@@ -13,21 +13,11 @@ try:
 except ImportError: 
     has_nni = False
 
-#修改 请确保此路径正确！也可改为绝对路径
-STATS_PATH = './stats.npz'  
-
 
 if __name__ == '__main__':
     args = create_parser().parse_args()
     config = args.__dict__
     
-    #修改 2. 加载 mean 和 std
-    data = np.load(STATS_PATH)
-    mean = data['mean']  # shape: (C,)，例如 (7,)
-    std  = data['std']   # shape: (C,)
-    #修改 将 mean 和 std 存入 config，让测试时可以访问到
-    config['mean'] = mean
-    config['std']  = std
     if has_nni:
         tuner_params = nni.get_next_parameter()
         config.update(tuner_params)
@@ -36,6 +26,8 @@ if __name__ == '__main__':
     config = update_config(config, load_config(args.config_file),
                            exclude_keys=['method', 'batch_size', 'val_batch_size'])
     default_values = default_parser()
+
+
     for attribute in default_values.keys():
         if config[attribute] is None:
             config[attribute] = default_values[attribute]

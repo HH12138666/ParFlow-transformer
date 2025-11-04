@@ -129,7 +129,7 @@ class PredFormer(Base_method):
             std = std.unsqueeze(0)
         self._loss_std_cache[key] = std
         return std
-
+    # 计算物理量损失
     def _compute_physical_loss(self, pred_y, batch_y, std_tensor):
         std = self._get_loss_std(std_tensor, pred_y)
         if std is None:

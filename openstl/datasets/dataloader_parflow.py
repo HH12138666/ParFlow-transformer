@@ -174,7 +174,7 @@ class ParFlowDataset(Dataset):
             elif STATS_COMPUTE_SAMPLES and STATS_COMPUTE_SAMPLES > 0:
                 self.mean, self.std = compute_mean_std(
                     self.files,
-                    target_h=128, target_w=240,
+                    target_h=CROP_H, target_w=CROP_W,
                     spatial_stride=STATS_SPATIAL_STRIDE,
                     time_stride=STATS_TIME_STRIDE,
                     max_files=STATS_COMPUTE_SAMPLES,
@@ -294,9 +294,9 @@ def load_data(batch_size,
 
 
 if __name__ == '__main__':
-    '''
+    
     # 检查数据加载器
-    dataloader_train, _, dataloader_test = \
+    dataloader_train, dataloader_vali, dataloader_test = \
         load_data(batch_size=1,
                   val_batch_size=1,
                   data_root='data/',
@@ -304,7 +304,7 @@ if __name__ == '__main__':
                   pre_seq_length=9,
                   aft_seq_length=1)
 
-    print(len(dataloader_train), len(dataloader_test))
+    print(len(dataloader_train),len(dataloader_vali),len(dataloader_test))
 
     for item in dataloader_train:
         print(item[0].shape, item[1].shape)
@@ -312,7 +312,7 @@ if __name__ == '__main__':
     for item in dataloader_test:
         print(item[0].shape, item[1].shape)
         break
-    '''
+    
 
 
     '''
@@ -333,7 +333,7 @@ if __name__ == '__main__':
             print(f"最小值: {n.min():.2f}, 最大值: {n.max():.2f}, 均值: {n.mean():.2f}")
     '''
 
-    
+    '''
     # 计算均值和方差
     mean, std = compute_mean_std(
         files = _list_pfb_files('data/')
@@ -344,6 +344,7 @@ if __name__ == '__main__':
         print(f"Channel {c}: Mean = {mean[c]:.6f}, Std = {std[c]:.6f}")
     # np.savez(STATS_PATH, mean=mean, std=std)  # 保存为 stats.npz 文件
     # print(f"✅ 均值和方差已保存到：{STATS_PATH}")
+    '''
 
     '''
     # 统计 Channel 的最大值、最小值、均值、标准差
