@@ -15,6 +15,7 @@ class PredFormer(Base_method):
         self.model = self._build_model(self.config)
         self.model_optim, self.scheduler, self.by_epoch = self._init_optimizer(steps_per_epoch)
         self.criterion = nn.MSELoss()
+        self.rmse_eps = getattr(args, 'rmse_eps', 1e-8)
         self._loss_std_cache = {} #修改 cache for loss std of each variable
         
     def _build_model(self, args):
@@ -66,7 +67,8 @@ class PredFormer(Base_method):
 
             with self.amp_autocast():
                 pred_y = self._predict(batch_x)
-                loss = self.criterion(pred_y, batch_y)
+                mse_loss = self.criterion(pred_y, batch_y)
+                loss = torch.sqrt(mse_loss + self.rmse_eps)
                 #修改 compute physical loss for denormalized data if needed
                 log_loss = self._compute_physical_loss(pred_y, batch_y, dataset_std)
             log_loss_detached = log_loss.detach()
@@ -133,8 +135,10 @@ class PredFormer(Base_method):
     def _compute_physical_loss(self, pred_y, batch_y, std_tensor):
         std = self._get_loss_std(std_tensor, pred_y)
         if std is None:
-            return self.criterion(pred_y, batch_y)
-        return self.criterion(pred_y * std, batch_y * std)
+            mse = self.criterion(pred_y, batch_y)
+        else:
+            mse = self.criterion(pred_y * std, batch_y * std)
+        return torch.sqrt(mse + self.rmse_eps)
 
     def _compute_logging_loss(self, pred_y, batch_y, dataset):
         std_tensor = getattr(dataset, 'std_t', None)

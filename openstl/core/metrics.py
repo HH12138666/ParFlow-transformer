@@ -14,28 +14,48 @@ def rescale(x):
     return (x - x.max()) / (x.max() - x.min()) * 2 - 1
 
 
-def MAE(pred, true, spatial_norm=False):
-    if not spatial_norm:
-        return np.mean(np.abs(pred-true), axis=(0, 1)).sum()
+def _reduce_channel_metric(metric_map, spatial_norm=False, root=False):
+    """Reduce a per-element metric into a single scalar.
+
+    Args:
+        metric_map (ndarray): Element-wise metric values with shape (B, T, C, H, W).
+        spatial_norm (bool): Whether to normalise each channel by the spatial volume.
+        root (bool): Whether to take the square root after averaging (for RMSE).
+    """
+
+    # Average over batch, temporal and spatial axes to obtain per-channel values.
+    channel_metric = metric_map.mean(axis=(0, 1, 3, 4))
+
+    if spatial_norm:
+        # When spatial_norm is requested, report the mean channel error so the
+        # magnitude is invariant to the number of channels.
+        reduced = channel_metric.mean()
     else:
-        norm = pred.shape[-1] * pred.shape[-2] * pred.shape[-3]
-        return np.mean(np.abs(pred-true) / norm, axis=(0, 1)).sum()
+        # Otherwise follow the legacy behaviour of aggregating channels via sum.
+        reduced = channel_metric.sum()
+
+    if root:
+        reduced = np.sqrt(reduced)
+
+    return reduced
+
+
+def MAE(pred, true, spatial_norm=False):
+    return _reduce_channel_metric(np.abs(pred - true), spatial_norm=spatial_norm)
 
 
 def MSE(pred, true, spatial_norm=False):
-    if not spatial_norm:
-        return np.mean((pred-true)**2, axis=(0, 1)).sum()
-    else:
-        norm = pred.shape[-1] * pred.shape[-2] * pred.shape[-3]
-        return np.mean((pred-true)**2 / norm, axis=(0, 1)).sum()
+    return _reduce_channel_metric((pred - true) ** 2, spatial_norm=spatial_norm)
 
 
 def RMSE(pred, true, spatial_norm=False):
-    if not spatial_norm:
-        return np.sqrt(np.mean((pred-true)**2, axis=(0, 1)).sum())
-    else:
-        norm = pred.shape[-1] * pred.shape[-2] * pred.shape[-3]
-        return np.sqrt(np.mean((pred-true)**2 / norm, axis=(0, 1)).sum())
+    return _reduce_channel_metric((pred - true) ** 2, spatial_norm=spatial_norm, root=True)
+
+
+def MAPE(pred, true, spatial_norm=False, eps=1e-6):
+    denom = np.where(np.abs(true) < eps, eps, np.abs(true))
+    percentage_error = np.abs((pred - true) / denom)
+    return _reduce_channel_metric(percentage_error, spatial_norm=spatial_norm)
 
 
 def PSNR(pred, true, min_max_norm=True):
@@ -162,7 +182,7 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
     '''
     eval_res = {}
     eval_log = ""
-    allowed_metrics = ['mae', 'mse', 'rmse', 'ssim', 'psnr', 'snr', 'lpips']
+    allowed_metrics = ['mae', 'mse', 'rmse', 'mape', 'ssim', 'psnr', 'snr', 'lpips']
     invalid_metrics = set(metrics) - set(allowed_metrics)
     if len(invalid_metrics) != 0:
         raise ValueError(f'metric {invalid_metrics} is not supported.')
@@ -205,6 +225,17 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
                                                        true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
                 rmse_sum += eval_res[f'rmse_{str(c_name)}']
             eval_res['rmse'] = rmse_sum / c_group
+
+    if 'mape' in metrics:
+        if channel_names is None:
+            eval_res['mape'] = MAPE(pred, true, spatial_norm)
+        else:
+            mape_sum = 0.
+            for i, c_name in enumerate(channel_names):
+                eval_res[f'mape_{str(c_name)}'] = MAPE(pred[:, :, i*c_width: (i+1)*c_width, ...],
+                                                       true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
+                mape_sum += eval_res[f'mape_{str(c_name)}']
+            eval_res['mape'] = mape_sum / c_group
 
     pred = np.maximum(pred, clip_range[0])
     pred = np.minimum(pred, clip_range[1])
