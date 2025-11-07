@@ -6,6 +6,6 @@ dataset_parameters = {
     'aft_seq_length': 1,
     'total_length': 10,
     'data_name': 'parflow',
-    'metrics': ['mse', 'mae', 'ssim', 'psnr'],
+    'metrics': ['mae', 'mse', 'rmse', 'mape'],
     },
 }

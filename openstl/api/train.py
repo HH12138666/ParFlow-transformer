@@ -43,9 +43,6 @@ class BaseExperiment(object):
         self._world_size = 1
         self._dist = self.args.dist
         self._early_stop = self.args.early_stop_epoch
-        # 修改
-        self.mean = self.args.mean
-        self.std = self.args.std
 
         # Initialize TensorBoard SummaryWriter
         if self._rank == 0:     
@@ -310,7 +307,6 @@ class BaseExperiment(object):
         early_stop = False
         self.call_hook('before_train_epoch')
 
-        eta = 1.0  # PredRNN variants
         for epoch in range(self._epoch, self._max_epochs):
             if self._dist and hasattr(self.train_loader.sampler, 'set_epoch'):
                 self.train_loader.sampler.set_epoch(epoch)
@@ -325,12 +321,6 @@ class BaseExperiment(object):
                 with torch.no_grad():
                     vali_loss = self.vali()
                     
-                    # Learning rate adjustment
-                    # if isinstance(self.method.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    #     self.method.scheduler.step(vali_loss)
-                    # else:
-                    #     self.method.scheduler.step(epoch)
-
                 if self._rank == 0:
                     print_log('Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | Vali Loss: {4:.7f}\n'.format(
                         epoch + 1, len(self.train_loader), cur_lr, loss_mean.avg, vali_loss))
@@ -379,23 +369,16 @@ class BaseExperiment(object):
         self.call_hook('before_val_epoch')
         results = self.method.test_one_epoch(self, self.test_loader)
         self.call_hook('after_val_epoch')
-        # 修改 metric_list, spatial_norm = self.args.metrics, False（原本）
-        if 'parflow' in self.args.dataname:
-            metric_list, spatial_norm = self.args.metrics, True
-            channel_names = None
-            # channel_names = self.test_loader.dataset.data_name if 'mv' in self.args.dataname else None
-        else:
-            #metric_list, spatial_norm, channel_names = self.args.metrics, False, None(原本)
-            metric_list, spatial_norm, channel_names = self.args.metrics, True, None
+
+
+        metric_list, spatial_norm, channel_names = self.args.metrics, True, None
+
+        
         eval_res, eval_log = metric(results['preds'], results['trues'],
-                                    self.mean, self.std,
-                                    metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
-        # 修改
-        '''eval_res, eval_log = metric(results['preds'], results['trues'],
                                     self.test_loader.dataset.mean, self.test_loader.dataset.std,
                                     metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
-        '''
-        results['metrics'] = np.array([eval_res['mae'], eval_res['mse']])
+        
+        results['metrics'] = np.array([eval_res['mae'], eval_res['mse'],eval_res['rmse'], eval_res['mape']])
 
         if self._rank == 0:
             print_log(eval_log)

@@ -158,33 +158,3 @@ class PredFormer_Model(nn.Module):
         
         return x
     
-# model_config = {
-#     # image h w c
-#     'height': 64,
-#     'width': 64,
-#     'num_channels': 1,
-#     # video length in and out
-#     'pre_seq': 10,
-#     'after_seq': 10,
-#     # patch size
-#     'patch_size': 8,
-#     'dim': 256, 
-#     'heads': 8,
-#     'dim_head': 32,
-#     # dropout
-#     'dropout': 0.0,
-#     'attn_dropout': 0.0,
-#     'drop_path': 0.0,
-#     'scale_dim': 4,
-#     # depth
-#     'depth': 1,
-#     'Ndepth': 12
-# }
-
-# model = PredFormer_Model(model_config)
-# x = torch.rand(1, 10, 1, 64, 64)
-# output = model(x)
-# print(output.shape)  # [B, T, C, H, W]
-# # # Calculate FLOPs
-# flops = FlopCountAnalysis(model, x)
-# print(f'Number of flops: {flop_count_table(flops)}')

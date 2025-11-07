@@ -14,9 +14,11 @@ except ImportError:
 
 
 if __name__ == '__main__':
+    # 创建参数解析器并解析命令行参数
     args = create_parser().parse_args()
     config = args.__dict__
-
+    
+    
     if has_nni:
         tuner_params = nni.get_next_parameter()
         config.update(tuner_params)

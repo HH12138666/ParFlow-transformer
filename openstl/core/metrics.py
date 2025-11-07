@@ -36,84 +36,14 @@ def RMSE(pred, true, spatial_norm=False):
     else:
         norm = pred.shape[-1] * pred.shape[-2] * pred.shape[-3]
         return np.sqrt(np.mean((pred-true)**2 / norm, axis=(0, 1)).sum())
-
-
-def PSNR(pred, true, min_max_norm=True):
-    """Peak Signal-to-Noise Ratio.
-
-    Ref: https://en.wikipedia.org/wiki/Peak_signal-to-noise_ratio
-    """
-    mse = np.mean((pred.astype(np.float32) - true.astype(np.float32))**2)
-    if mse == 0:
-        return float('inf')
-    else:
-        if min_max_norm:  # [0, 1] normalized by min and max
-            return 20. * np.log10(1. / np.sqrt(mse))  # i.e., -10. * np.log10(mse)
-        else:
-            return 20. * np.log10(255. / np.sqrt(mse))  # [-1, 1] normalized by mean and std
-
-# cite the `PSNR` code from E3d-LSTM, Thanks!
-# https://github.com/google/e3d_lstm/blob/master/src/trainer.py line 39-40
-# def PSNR(pred, true):
-#     mse = np.mean((np.uint8(pred * 255)-np.uint8(true * 255))**2)
-#     return 20 * np.log10(255) - 10 * np.log10(mse)
-
-def SNR(pred, true):
-    """Signal-to-Noise Ratio.
-
-    Ref: https://en.wikipedia.org/wiki/Signal-to-noise_ratio
-    """
-    signal = ((true)**2).mean()
-    noise = ((true - pred)**2).mean()
-    return 10. * np.log10(signal / noise)
-
-# def SSIM(pred, true, **kwargs):
-
-# def SSIM(pred, true, **kwargs):
-#     C1 = (0.01 * 255)**2
-#     C2 = (0.03 * 255)**2
-
-#     img1 = pred.astype(np.float64)
-#     img2 = true.astype(np.float64)
-#     kernel = cv2.getGaussianKernel(11, 1.5)
-#     window = np.outer(kernel, kernel.transpose())
-
-#     mu1 = cv2.filter2D(img1, -1, window)[5:-5, 5:-5]  # valid
-#     mu2 = cv2.filter2D(img2, -1, window)[5:-5, 5:-5]
-#     mu1_sq = mu1**2
-#     mu2_sq = mu2**2
-#     mu1_mu2 = mu1 * mu2
-#     sigma1_sq = cv2.filter2D(img1**2, -1, window)[5:-5, 5:-5] - mu1_sq
-#     sigma2_sq = cv2.filter2D(img2**2, -1, window)[5:-5, 5:-5] - mu2_sq
-#     sigma12 = cv2.filter2D(img1 * img2, -1, window)[5:-5, 5:-5] - mu1_mu2
-
-#     ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) *
-#                                                             (sigma1_sq + sigma2_sq + C2))
-#     return ssim_map.mean()
-
-
-class LPIPS(torch.nn.Module):
-    """Learned Perceptual Image Patch Similarity, LPIPS.
-
-    Modified from
-    https://github.com/richzhang/PerceptualSimilarity/blob/master/lpips_2imgs.py
-    """
-
-    def __init__(self, net='alex', use_gpu=True):
-        super().__init__()
-        assert net in ['alex', 'squeeze', 'vgg']
-        self.use_gpu = use_gpu and torch.cuda.is_available()
-        self.loss_fn = lpips.LPIPS(net=net)
-        if use_gpu:
-            self.loss_fn.cuda()
-
-    def forward(self, img1, img2):
-        # Load images, which are min-max norm to [0, 1]
-        img1 = lpips.im2tensor(img1 * 255)  # RGB image from [-1,1]
-        img2 = lpips.im2tensor(img2 * 255)
-        if self.use_gpu:
-            img1, img2 = img1.cuda(), img2.cuda()
-        return self.loss_fn.forward(img1, img2).squeeze().detach().cpu().numpy()
+#修改
+def MAPE(pred, true, spatial_norm=False, eps=1e-6):
+    denom = np.where(np.abs(true) < eps, eps, np.abs(true))
+    percentage_error = np.abs((pred - true) / denom)
+    if not spatial_norm:
+        return np.mean(percentage_error, axis=(0, 1)).sum()
+    norm = pred.shape[-1] * pred.shape[-2] * pred.shape[-3]
+    return np.mean(percentage_error / norm, axis=(0, 1)).sum()
 
 
 def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
@@ -162,7 +92,7 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
     '''
     eval_res = {}
     eval_log = ""
-    allowed_metrics = ['mae', 'mse', 'rmse', 'ssim', 'psnr', 'snr', 'lpips']
+    allowed_metrics = ['mae', 'mse', 'rmse', 'mape']
     invalid_metrics = set(metrics) - set(allowed_metrics)
     if len(invalid_metrics) != 0:
         raise ValueError(f'metric {invalid_metrics} is not supported.')
@@ -205,41 +135,18 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
                                                        true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
                 rmse_sum += eval_res[f'rmse_{str(c_name)}']
             eval_res['rmse'] = rmse_sum / c_group
-
-    pred = np.maximum(pred, clip_range[0])
-    pred = np.minimum(pred, clip_range[1])
-    if 'ssim' in metrics:
-        ssim = 0
-        for b in range(pred.shape[0]):
-            for f in range(pred.shape[1]):
-                ssim += cal_ssim(pred[b, f].swapaxes(0, 2),
-                                 true[b, f].swapaxes(0, 2), multichannel=True)
-        eval_res['ssim'] = ssim / (pred.shape[0] * pred.shape[1])
-
-    if 'psnr' in metrics:
-        psnr = 0
-        for b in range(pred.shape[0]):
-            for f in range(pred.shape[1]):
-                psnr += PSNR(pred[b, f], true[b, f])
-        eval_res['psnr'] = psnr / (pred.shape[0] * pred.shape[1])
-
-    if 'snr' in metrics:
-        snr = 0
-        for b in range(pred.shape[0]):
-            for f in range(pred.shape[1]):
-                snr += SNR(pred[b, f], true[b, f])
-        eval_res['snr'] = snr / (pred.shape[0] * pred.shape[1])
-
-    if 'lpips' in metrics:
-        lpips = 0
-        cal_lpips = LPIPS(net='alex', use_gpu=False)
-        pred = pred.transpose(0, 1, 3, 4, 2)
-        true = true.transpose(0, 1, 3, 4, 2)
-        for b in range(pred.shape[0]):
-            for f in range(pred.shape[1]):
-                lpips += cal_lpips(pred[b, f], true[b, f])
-        eval_res['lpips'] = lpips / (pred.shape[0] * pred.shape[1])
-
+    #修改
+    if 'mape' in metrics:
+        if channel_names is None:
+            eval_res['mape'] = MAPE(pred, true, spatial_norm)
+        else:
+            mape_sum = 0.
+            for i, c_name in enumerate(channel_names):
+                eval_res[f'mape_{str(c_name)}'] = MAPE(pred[:, :, i*c_width: (i+1)*c_width, ...],
+                                                       true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
+                mape_sum += eval_res[f'mape_{str(c_name)}']
+            eval_res['mape'] = mape_sum / c_group
+    
     if return_log:
         for k, v in eval_res.items():
             eval_str = f"{k}:{v}" if len(eval_log) == 0 else f", {k}:{v}"

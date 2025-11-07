@@ -65,13 +65,13 @@ def create_parser():
                         help='Whether to drop the last batch in the val data loading')
 
     # method parameters
-    parser.add_argument('--method', '-m', default='SimVP', type=str,
+    parser.add_argument('--method', '-m', default='predformer', type=str,
                         choices=['ConvLSTM', 'convlstm', 'CrevNet', 'crevnet', 'DMVFN', 'dmvfn', 'E3DLSTM', 'e3dlstm',
-                                 'MAU', 'mau', 'MIM', 'mim', 'PhyDNet', 'phydnet', 'PredNet', 'prednet',
+                                 'MAU', 'mau', 'MIM', 'mim', 'PhyDNet', 'phydnet', 'PredNet', 'prednet','predformer',
                                  'PredRNN', 'predrnn', 'PredRNNpp', 'predrnnpp', 'PredRNNv2', 'predrnnv2',
                                  'SimVP', 'simvp', 'TAU', 'tau','STGame','stgame','STPara','stpara','stmamba','STMamba',
                                  'syncformer','SyncFormer', 'syncformer_ablation', 'SyncFormer_Ablation','quadformer','QuadFormer','mam','MAM'],
-                        help='Name of video prediction method to train (default: "SimVP")')
+                        help='Name of video prediction method to train (default: "predformer")')
     parser.add_argument('--config_file', '-c', default='configs/parflow/PredFormer.py', type=str,
                         help='Path to the default config file')
     parser.add_argument('--model_type', default=None, type=str,
@@ -139,11 +139,7 @@ def create_parser():
                         help='Mode for applying drop path rate scheduling: "standard", "early", or "late"')
     parser.add_argument('--drop_schedule', default='constant', type=str, choices=['constant', 'linear'],
                         help='Schedule for drop path rate in early mode: "constant" or "linear"')
-    # Mean and Std parameters
-    parser.add_argument('--mean', type=float, nargs='+', default=None,
-                        help='Mean values for data normalization')  
-    parser.add_argument('--std', type=float, nargs='+', default=None,
-                        help='Standard deviation values for data normalization')
+
     return parser
 
 
@@ -215,5 +211,6 @@ def default_parser():
         'decay_epoch': 100,
         'decay_rate': 0.1,
         'filter_bias_and_bn': False,
+
     }
     return default_values

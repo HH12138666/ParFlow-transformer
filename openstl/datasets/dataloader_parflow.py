@@ -155,7 +155,7 @@ class ParFlowDataset(Dataset):
 
         sample = _read_press_frame(self.files[0], target_h=CROP_H, target_w=CROP_W)
         C, H, W = sample.shape
-        self.C, self.H, self.W = 7, H, W   
+        self.C, self.H, self.W = C, H, W   
         # 修改
 
         self.start_indices = self._build_time_indices(stride=max(1, int(stride)))
@@ -240,15 +240,14 @@ def load_data(batch_size,
               aft_seq_length = 1,
               in_shape: Optional[List[int]] = None,
               distributed = False,
-              use_augment = True,
+              use_augment = False,
               use_prefetcher = False,
               drop_last = False,
               stride=1):
     train_ds = ParFlowDataset(data_root, 'train', pre_seq_length, aft_seq_length,in_shape=in_shape,stride=stride, use_augment=use_augment)
-    try:
-        val_ds = ParFlowDataset(data_root, 'val', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
-    except Exception:
-        val_ds = ParFlowDataset(data_root, 'test', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
+    
+    val_ds = ParFlowDataset(data_root, 'val', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
+
     test_ds = ParFlowDataset(data_root, 'test', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
 
     input_channels = train_ds.C
@@ -303,7 +302,7 @@ if __name__ == '__main__':
                   num_workers=4,
                   pre_seq_length=9,
                   aft_seq_length=1)
-
+    print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
     print(len(dataloader_train),len(dataloader_vali),len(dataloader_test))
 
     for item in dataloader_train:

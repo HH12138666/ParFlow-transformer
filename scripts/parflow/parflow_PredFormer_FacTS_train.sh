@@ -5,10 +5,10 @@ cd "$REPO"
 #让当前仓库优先于任何其他已安装/旧仓库
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
-
+# 选择使用的GPU
 export CUDA_VISIBLE_DEVICES=0
 CURRENT_TIME=$(date +"%Y-%m-%d-%H-%M")
-EX_NAME="ParFlow_press/${CURRENT_TIME}_PredFormer_depth4_Quadruplet_TSST_sd0.25_dp0.1_ps4_bs16_256_8_32_5e-4_Adamw_cosine_200ep"
+EX_NAME="ParFlow_press/${CURRENT_TIME}_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep"
 
 python tools/train.py \
     --config_file configs/parflow/PredFormer.py \
@@ -17,7 +17,7 @@ python tools/train.py \
     --res_dir work_dirs \
     --batch_size 10 \
     --val_batch_size 10 \
-    --epoch 30 \
+    --epoch 50 \
     --overwrite \
     --lr 5e-4 \
     --sched cosine \
@@ -26,11 +26,7 @@ python tools/train.py \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
     --tb_dir logs_tb/03_08 \
-    # metrics
-    --metrics mse mae \
-    # mean and std for normalization
-    --mean 320.9309 123.27885 53.482414 21.529709 7.8458643 2.342689 0.40309316 \
-    --std 49.292667 38.47684 24.06772 12.508097 5.8830347 2.8203301 1.3178533
-    # --dist
+    --use_prefetcher  \
+    --drop_last
 
 # nohup bash /home/huanghui/data/ParFlow-transformer/scripts/parflow/parflow_PredFormer_FacTS_train.sh > "train_log_2$(date +'%Y%m%d_%H%M%S').log" 2>&1 &
