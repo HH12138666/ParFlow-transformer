@@ -22,6 +22,7 @@ EPS = 1e-6
 
 NORMALIZE = True
 NORMALIZE_TARGET = True
+OUTLIER_THRESHOLD = -10000.0
 STATS_PATH = './stats.npz'                   # 存放均值和方差的路径，如设 None 则不加载
 STATS_COMPUTE_SAMPLES = 0          # 计算均值和方差时使用的样本数量，如设 0 则不计算
 STATS_TIME_STRIDE = 1
@@ -61,15 +62,45 @@ def _center_crop_h(arr, target_h=CROP_H,target_w=CROP_W) :
 
 
 
+def _interpolate_outliers(arr: np.ndarray, threshold: float = OUTLIER_THRESHOLD) -> np.ndarray:
+    """Replace outliers (< threshold) along the channel axis using interpolation."""
+    if arr.ndim != 3:
+        raise ValueError(f"Expected 3D array for interpolation, got shape {arr.shape}.")
+
+    repaired = arr.astype(np.float32, copy=True)
+    c, h, w = repaired.shape
+    flat = repaired.reshape(c, -1)
+    mask = flat < threshold
+    if not mask.any():
+        return repaired
+
+    for idx in range(flat.shape[1]):
+        col = flat[:, idx]
+        col_mask = mask[:, idx]
+        if not col_mask.any():
+            continue
+
+        valid_idx = np.where(~col_mask)[0]
+        if valid_idx.size == 0:
+            # 无有效值时退化为填充 0
+            col[:] = 0.0
+        elif valid_idx.size == 1:
+            col[col_mask] = col[valid_idx[0]]
+        else:
+            invalid_idx = np.where(col_mask)[0]
+            col[col_mask] = np.interp(invalid_idx, valid_idx, col[valid_idx])
+
+    return flat.reshape(c, h, w)
+
+
 def _read_press_frame(path, target_h=CROP_H, target_w=CROP_W) :
 
     arr = read_pfb(get_absolute_path(path)).astype(np.float32)  # (C,H,W)
-    #修改
-    arr = arr[0:7, :, :]  # 只取前7个通道
+    arr = _interpolate_outliers(arr, threshold=OUTLIER_THRESHOLD)
     if arr.ndim != 3:
         raise ValueError(f'Expected 3D array per .pfb, got shape {arr.shape} for {path}')
 
-    arr = _center_crop_h(arr, target_h=target_h, target_w = target_w)  
+    arr = _center_crop_h(arr, target_h=target_h, target_w = target_w)
     return arr
 
 #计算均值和方差
