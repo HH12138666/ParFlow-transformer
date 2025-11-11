@@ -66,6 +66,20 @@ def _unnormalize(arr: np.ndarray, mean: Optional[np.ndarray], std: Optional[np.n
     return arr * std + mean
 
 
+def _prepare_volume(field: np.ndarray) -> np.ndarray:
+    """Ensure a prediction slice is a contiguous 3-D ``float32`` volume."""
+
+    volume = np.asarray(field)
+    if volume.ndim == 4 and volume.shape[0] == 1:
+        volume = volume[0]
+    if volume.ndim == 2:
+        volume = volume[np.newaxis, ...]
+    if volume.ndim != 3:
+        raise ValueError(
+            f'Expected prediction volume with 3 dimensions, got shape {volume.shape}.')
+    return np.ascontiguousarray(volume.astype(np.float32, copy=False))
+
+
 def _save_predictions(preds: np.ndarray, dataset, output_dir: str) -> int:
     """Persist predictions to ``.pfb`` files matching the dataset chronology."""
 
@@ -92,7 +106,7 @@ def _save_predictions(preds: np.ndarray, dataset, output_dir: str) -> int:
                     output_dir,
                     f'{root}_sample{sample_idx:05d}_step{step_idx:02d}{ext}')
 
-            write_pfb(dest_path, field.astype(np.float32, copy=False))
+            write_pfb(dest_path, _prepare_volume(field))
             total_saved += 1
 
     return total_saved
