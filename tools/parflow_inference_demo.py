@@ -70,10 +70,13 @@ def _prepare_volume(field: np.ndarray) -> np.ndarray:
     """Ensure a prediction slice is a contiguous 3-D ``float32`` volume."""
 
     volume = np.asarray(field)
-    if volume.ndim == 4 and volume.shape[0] == 1:
-        volume = volume[0]
+
     if volume.ndim == 2:
         volume = volume[np.newaxis, ...]
+    elif volume.ndim > 3:
+        leading = int(np.prod(volume.shape[:-2]))
+        volume = volume.reshape(leading, volume.shape[-2], volume.shape[-1])
+
     if volume.ndim != 3:
         raise ValueError(
             f'Expected prediction volume with 3 dimensions, got shape {volume.shape}.')
