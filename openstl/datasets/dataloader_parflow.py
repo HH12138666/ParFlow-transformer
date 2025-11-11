@@ -15,20 +15,21 @@ from .utils import create_loader
 logger = logging.getLogger(__name__)
 
 
-CROP_H = 128
-CROP_W = 240
+CROP_H = 144
+CROP_W = 252
 EPS = 1e-6
 
 
 NORMALIZE = True
 NORMALIZE_TARGET = True
-STATS_PATH = './stats.npz'                   # 存放均值和方差的路径，如设 None 则不加载
+STATS_PATH = './stats.npz'                  # 存放均值和方差的路径，如设 None 则不加载 './stats.npz'
 STATS_COMPUTE_SAMPLES = 0          # 计算均值和方差时使用的样本数量，如设 0 则不计算
 STATS_TIME_STRIDE = 1
 STATS_SPATIAL_STRIDE = 1
 MAX_FILES = None                    # 设为 None 表示使用全部文件；也可以设为 100 只用前100个
-CHANNELS = None                     # 设为 None 表示使用所有通道；也可以设为 [0] 只计算第0通道
+CHANNELS = None    
 
+OUTLIER_THRESHOLD = -10000.0    # 异常值阈值，低于该值的样本将被视为异常并排除在均值和方差计算之外
 
 def _natural_key(p):
     b = os.path.basename(p)
@@ -59,13 +60,44 @@ def _center_crop_h(arr, target_h=CROP_H,target_w=CROP_W) :
         arr = arr[:, :, left:left + target_w]
     return arr
 
+def _interpolate_outliers(arr, threshold = OUTLIER_THRESHOLD) :
+    """Replace outliers (< threshold) along the channel axis using interpolation."""
+    if arr.ndim != 3:
+        raise ValueError(f"Expected 3D array for interpolation, got shape {arr.shape}.")
+
+    repaired = arr.astype(np.float32, copy=True)
+    c, h, w = repaired.shape
+    flat = repaired.reshape(c, -1)
+    mask = flat < threshold
+    if not mask.any():
+        return repaired
+
+    for idx in range(flat.shape[1]):
+        col = flat[:, idx]
+        col_mask = mask[:, idx]
+        if not col_mask.any():
+            continue
+
+        valid_idx = np.where(~col_mask)[0]
+        if valid_idx.size == 0:
+            # 无有效值时退化为填充 0
+            col[:] = 0.0
+        elif valid_idx.size == 1:
+            col[col_mask] = col[valid_idx[0]]
+        else:
+            invalid_idx = np.where(col_mask)[0]
+            col[col_mask] = np.interp(invalid_idx, valid_idx, col[valid_idx])
+
+    return flat.reshape(c, h, w)
+
+
 
 
 def _read_press_frame(path, target_h=CROP_H, target_w=CROP_W) :
 
     arr = read_pfb(get_absolute_path(path)).astype(np.float32)  # (C,H,W)
-    #修改
-    arr = arr[0:7, :, :]  # 只取前7个通道
+
+    arr = _interpolate_outliers(arr, threshold=OUTLIER_THRESHOLD)
     if arr.ndim != 3:
         raise ValueError(f'Expected 3D array per .pfb, got shape {arr.shape} for {path}')
 
@@ -156,7 +188,7 @@ class ParFlowDataset(Dataset):
         sample = _read_press_frame(self.files[0], target_h=CROP_H, target_w=CROP_W)
         C, H, W = sample.shape
         self.C, self.H, self.W = C, H, W   
-        # 修改
+        
 
         self.start_indices = self._build_time_indices(stride=max(1, int(stride)))
 
@@ -184,8 +216,6 @@ class ParFlowDataset(Dataset):
                 self.mean = np.zeros((self.C,), dtype=np.float32)
                 self.std  = np.ones((self.C,), dtype=np.float32)
 
-        self.mean_t = torch.from_numpy(self.mean).view(1, self.C, 1, 1).float() if self.mean is not None else None
-        self.std_t  = torch.from_numpy(self.std ).view(1, self.C, 1, 1).float() if self.std  is not None else None
 
     def _build_time_indices(self, stride=1):
         n_train = int(self.num_frames * 0.70)
@@ -294,7 +324,10 @@ def load_data(batch_size,
 
 if __name__ == '__main__':
     
-    # 检查数据加载器
+    
+
+    
+    # 检查数据加载器和mean和std计算是否正确
     dataloader_train, dataloader_vali, dataloader_test = \
         load_data(batch_size=1,
                   val_batch_size=1,
@@ -303,6 +336,8 @@ if __name__ == '__main__':
                   pre_seq_length=9,
                   aft_seq_length=1)
     print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
+    
+    '''
     print(len(dataloader_train),len(dataloader_vali),len(dataloader_test))
 
     for item in dataloader_train:
@@ -311,8 +346,23 @@ if __name__ == '__main__':
     for item in dataloader_test:
         print(item[0].shape, item[1].shape)
         break
+    '''
     
+    
+    
+    '''
+    mean, std = compute_mean_std(
+        files = _list_pfb_files('data/'),
+    )
+    print(f"✅ 计算完成！")
+    print(f"   - 通道数 C = {mean.shape[0]}")
+    print(f"   - Mean 示例: {mean[:3]} ...")
+    print(f"   - Std  示例: {std[:3]} ...")
 
+    # 保存为 .npz 文件
+    np.savez(STATS_PATH, mean=mean, std=std)
+    print(f"📦 统计量已保存至: {STATS_PATH}")    
+    '''
 
     '''
     检查各个通道的均值和方差计算是否正确
@@ -347,7 +397,7 @@ if __name__ == '__main__':
 
     '''
     # 统计 Channel 的最大值、最小值、均值、标准差
-    for c in range(7, 10):  # 假设有10个通道
+    for c in range(10):  # 假设有10个通道
         all_channel_data = []
         files = _list_pfb_files('data/')
         for file in files:
@@ -359,8 +409,8 @@ if __name__ == '__main__':
         min_per_sample = [arr.min() for arr in all_channel_data]
         print(f"Channel {c} 的最大值为：", max(max_per_sample))
         print(f"Channel {c} 的最小值为：", min(min_per_sample))
-        print(f"Channel {c} 异常样本数（比如最大值 > 100）：", sum(v > 100 for v in max_per_sample))
-        print(f"Channel {c} 异常样本数（比如最小值 < -100）：", sum(v < -100 for v in min_per_sample))
+        print(f"Channel {c} 异常样本数（比如最大值 > 1000）：", sum(v > 1000 for v in max_per_sample))
+        print(f"Channel {c} 异常样本数（比如最小值 < -1000）：", sum(v < -1000 for v in min_per_sample))
         mean_c = np.mean(np.concatenate(all_channel_data))
         std_c = np.std(np.concatenate(all_channel_data))
         print(f"Channel {c} 的均值为：", mean_c)    

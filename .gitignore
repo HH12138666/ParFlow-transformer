@@ -4,3 +4,5 @@ work_dirs/
 output.log
 nohup.out
 train_log_*
+check_data_figure/
+result_analyze/

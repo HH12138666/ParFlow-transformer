@@ -54,6 +54,7 @@ def create_parser():
     parser.add_argument('--data_root', default='./data')
     parser.add_argument('--dataname', '-d', default='parflow', type=str,
                         help='Dataset name (default: "parflow")')
+    parser.add_argument('--patch_size', default=4, type=int, help='Patch size for training')
     parser.add_argument('--pre_seq_length', default=None, type=int, help='Sequence length before prediction')
     parser.add_argument('--aft_seq_length', default=None, type=int, help='Sequence length after prediction')
     parser.add_argument('--total_length', default=None, type=int, help='Total Sequence length for prediction')
