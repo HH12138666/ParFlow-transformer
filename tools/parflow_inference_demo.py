@@ -4,18 +4,12 @@ import os
 from types import SimpleNamespace
 from typing import Optional
 
-import matplotlib
-
-# Use a non-interactive backend when no display is available (e.g. on servers).
-if os.name != 'nt' and not os.environ.get('DISPLAY'):
-    matplotlib.use('Agg')
-
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
 from openstl.api import BaseExperiment
 from openstl.utils import default_parser, setup_multi_processes
+from parflow.tools.io import write_pfb
 
 
 def _load_experiment_args(work_dir: str,
@@ -72,56 +66,44 @@ def _unnormalize(arr: np.ndarray, mean: Optional[np.ndarray], std: Optional[np.n
     return arr * std + mean
 
 
-def _select_frame(sequence: np.ndarray, time_idx: int, channel: int) -> np.ndarray:
-    if sequence.ndim != 4:
-        raise ValueError(f'Expected [T, C, H, W] array, got shape {sequence.shape}')
-    if not (0 <= time_idx < sequence.shape[0]):
-        raise IndexError(f'time index {time_idx} out of range for length {sequence.shape[0]}')
-    if not (0 <= channel < sequence.shape[1]):
-        raise IndexError(f'channel index {channel} out of range for {sequence.shape[1]} channels')
-    return sequence[time_idx, channel]
+def _save_predictions(preds: np.ndarray, dataset, output_dir: str) -> int:
+    """Persist predictions to ``.pfb`` files matching the dataset chronology."""
 
+    start_indices = dataset.start_indices
+    pre = dataset.pre
+    source_files = dataset.files
 
-def _plot_fields(observed: np.ndarray,
-                 target: np.ndarray,
-                 prediction: np.ndarray,
-                 output: Optional[str],
-                 show: bool) -> None:
-    diff = prediction - target
-    vmin = np.min([observed.min(), target.min(), prediction.min()])
-    vmax = np.max([observed.max(), target.max(), prediction.max()])
+    os.makedirs(output_dir, exist_ok=True)
 
-    fig, axes = plt.subplots(1, 4, figsize=(18, 4))
-    titles = ['Last observed frame', 'Ground truth', 'Prediction', 'Prediction − Truth']
-    data = [observed, target, prediction, diff]
-    cmaps = ['viridis', 'viridis', 'viridis', 'coolwarm']
-    norms = [(vmin, vmax), (vmin, vmax), (vmin, vmax), (diff.min(), diff.max())]
+    total_saved = 0
+    for sample_idx, start in enumerate(start_indices):
+        sample_preds = preds[sample_idx]
+        for step_idx, field in enumerate(sample_preds):
+            target_idx = start + pre + step_idx
+            if 0 <= target_idx < len(source_files):
+                base_name = os.path.basename(source_files[target_idx])
+            else:
+                base_name = f'sample{sample_idx:05d}_step{step_idx:02d}.pfb'
 
-    for ax, title, field, cmap, (fmin, fmax) in zip(axes, titles, data, cmaps, norms):
-        im = ax.imshow(field, cmap=cmap, vmin=fmin, vmax=fmax)
-        ax.set_title(title)
-        ax.axis('off')
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            dest_path = os.path.join(output_dir, base_name)
+            if os.path.exists(dest_path):
+                root, ext = os.path.splitext(base_name)
+                dest_path = os.path.join(
+                    output_dir,
+                    f'{root}_sample{sample_idx:05d}_step{step_idx:02d}{ext}')
 
-    fig.tight_layout()
-    if output:
-        fig.savefig(output, dpi=200)
-        print(f'Saved figure to {output}')
-    if show:
-        plt.show()
-    plt.close(fig)
+            write_pfb(dest_path, field.astype(np.float32, copy=False))
+            total_saved += 1
+
+    return total_saved
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Run ParFlow inference and visualize predictions.')
+    parser = argparse.ArgumentParser(description='Run ParFlow inference and export predictions as .pfb files.')
     parser.add_argument('--work-dir', required=True, help='Path to the experiment work_dir created during training.')
     parser.add_argument('--checkpoint', help='Checkpoint path to load. Defaults to work_dir/checkpoints/checkpoint.pth')
     parser.add_argument('--device', default='cuda', help='Device used for inference (cuda or cpu).')
-    parser.add_argument('--sample-index', type=int, default=0, help='Index of the sequence in the test set to visualize.')
-    parser.add_argument('--pred-step', type=int, default=0, help='Target step to visualize (0 <= pred_step < aft_seq_length).')
-    parser.add_argument('--channel', type=int, default=0, help='Channel index to visualize.')
-    parser.add_argument('--output', help='Optional path to save the comparison figure.')
-    parser.add_argument('--show', action='store_true', help='Display the matplotlib window after saving.')
+    parser.add_argument('--output-dir', help='Directory to store prediction .pfb files. Defaults to <work_dir>/pred_result.')
     args = parser.parse_args()
 
     work_dir = os.path.abspath(args.work_dir)
@@ -142,34 +124,16 @@ def main():
     results = exp.method.test_one_epoch(exp, exp.test_loader)
     exp.call_hook('after_val_epoch')
 
-    inputs = results['inputs']  # [N, pre, C, H, W]
-    trues = results['trues']    # [N, aft, C, H, W]
-    preds = results['preds']    # [N, aft, C, H, W]
-
-    if args.sample_index >= inputs.shape[0]:
-        raise IndexError(f'sample_index {args.sample_index} >= dataset size {inputs.shape[0]}')
-
+    preds = np.asarray(results['preds'])  # [N, aft, C, H, W]
     dataset = exp.test_loader.dataset
     mean = dataset.mean
     std = dataset.std
 
-    inputs = _unnormalize(inputs, mean, std)
-    trues = _unnormalize(trues, mean, std)
     preds = _unnormalize(preds, mean, std)
 
-    sequence_inputs = inputs[args.sample_index]
-    sequence_trues = trues[args.sample_index]
-    sequence_preds = preds[args.sample_index]
-
-    if not (0 <= args.pred_step < sequence_trues.shape[0]):
-        raise IndexError(
-            f'pred_step {args.pred_step} out of range for {sequence_trues.shape[0]} target steps')
-
-    last_observed = _select_frame(sequence_inputs, sequence_inputs.shape[0] - 1, args.channel)
-    target_frame = _select_frame(sequence_trues, args.pred_step, args.channel)
-    predicted_frame = _select_frame(sequence_preds, args.pred_step, args.channel)
-
-    _plot_fields(last_observed, target_frame, predicted_frame, args.output, args.show)
+    output_dir = args.output_dir or os.path.join(work_dir, 'pred_result')
+    saved = _save_predictions(preds, dataset, output_dir)
+    print(f'Saved {saved} prediction frames to {output_dir}')
 
 
 if __name__ == '__main__':
