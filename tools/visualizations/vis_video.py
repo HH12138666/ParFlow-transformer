@@ -18,7 +18,7 @@ def parse_args():
         description='Visualization of a STL model')
 
     parser.add_argument('--dataname', '-d', default=None, type=str,
-                        help='The name of dataset (default: "mmnist")')
+                        help='The name of dataset (default: "parflow")')
     parser.add_argument('--index', '-i', default=0, type=int, help='The index of a video sequence to show')
     parser.add_argument('--work_dirs', '-w', default=None, type=str,
                         help='Path to the work_dir or the path to a set of work_dirs')
@@ -49,7 +49,7 @@ def main():
         method_list = [args.work_dirs.split('/')[-1]]
         base_dir = base_dir.split(method_list[0])[0]
 
-    use_rgb = False if args.dataname in ['mfmnist', 'mmnist', 'kth20', 'kth', 'kth40'] else True
+    use_rgb = False 
     config = args.__dict__
     config.update(dataset_parameters[args.dataname])
     idx, ncols = args.index, config['aft_seq_length']
@@ -60,7 +60,7 @@ def main():
         assert 0 <= args.vis_channel <= config['in_shape'][1], 'Channel index out of range'
     else:
         c_surfix = ""
-        assert args.dataname not in ['taxibj', 'weather_uv10_5_625'], 'Please select a channel'
+        assert args.dataname not in ['parflow'], 'Please select a channel'
 
     # loading results
     predicts_dict, inputs_dict, trues_dict = dict(), dict(), dict()

@@ -36,6 +36,7 @@ def extract_config_params(log_text: str) -> Dict[str, object]:
         'use_augment': r'use_augment:\s*(True|False)',
         'epoch': r'epoch:\s*(\d+)',
         #'patch_size': r'patch_size:\s*(\d+)',
+        
         #'data_root': r'data_root:\s*(\S+)',
         #'dataname': r'dataname:\s*(\S+)',
         #'metrics': r'metrics:\s*\[([^\]]+)\]',
