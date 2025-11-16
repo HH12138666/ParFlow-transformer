@@ -13,7 +13,7 @@ target_h = CROP_H
 target_w = CROP_W
 save_abnormal_figure = "check_data_figure/lessthan-1000"
 save_all_channels_figure = "check_data_figure/raw_figures"
-data_threshold = -1000
+data_threshold = -10000
 target_hour_index = 3 
 
 os.makedirs(save_abnormal_figure, exist_ok=True)
@@ -79,16 +79,23 @@ def check_abnormal_values_and_save_images():
             data = _read_press_frame(pfb_path, target_h, target_w)
             C, H, W = data.shape
             for c in range(C):
-                channel_data = data[c, :, :]
-                if has_negative_outliers(channel_data, threshold=data_threshold):
-                    print(f"[异常] 小时 {hour_idx} | 通道 {c} 存在 < {data_threshold} 的值")
-                    abnormal_records.append((hour_idx, c, channel_data))
+                channel_data = data[c, :, :]  # shape: (H, W)
+                # 找出该通道中所有 < data_threshold 的元素的坐标
+                abnormal_pixels = np.where(channel_data < data_threshold)
+                if len(abnormal_pixels[0]) > 0:  # 如果有异常值
+                    file_name = os.path.basename(pfb_path)  # 获取文件名（如 "pressure_0001.pfb"）
+                    print(f"\n[异常] 文件: {file_name} | 小时索引: {hour_idx} | 通道: {c}")
+                    for h_idx, w_idx in zip(*abnormal_pixels):
+                        value = channel_data[h_idx, w_idx]
+                        print(f"  → 异常位置: (H={h_idx}, W={w_idx}), 值 = {value}")
+                    abnormal_records.append((file_name, hour_idx, c, abnormal_pixels, channel_data))
         except Exception as e:
             print(f"[错误] 处理文件 {os.path.basename(pfb_path)} 时出错: {e}")
 
     n_abnormal = len(abnormal_records)
     print(f"检查完成。共发现 {n_abnormal} 个通道存在异常（值 < {data_threshold}）。")
 
+    '''
     # 可视化异常通道
     for idx, (hour_idx, channel_idx, channel_data) in enumerate(abnormal_records):
         try:
@@ -105,7 +112,7 @@ def check_abnormal_values_and_save_images():
             print(f"✅ 已保存异常图: {filename}")
         except Exception as e:
             print(f"❌ 保存异常图（小时 {hour_idx} 通道 {channel_idx}）时出错: {e}")
-            
+        '''    
 def visualize_selected_hour_all_channels():
     global target_hour_index  
 
@@ -156,9 +163,9 @@ def visualize_selected_hour_all_channels():
         
 def main():
 
-    #check_abnormal_values_and_save_images()
+    check_abnormal_values_and_save_images()
     
-    visualize_selected_hour_all_channels()  
+    #visualize_selected_hour_all_channels()  
     
 
 

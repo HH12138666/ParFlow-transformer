@@ -4,12 +4,12 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Sequence, Union
-import sys
+from typing import Dict, List, Optional, Union
 import numpy as np
 import torch
 from openstl.api import BaseExperiment
 from openstl.core import metric
+from parflow.tools.io import write_pfb
 from openstl.utils import (
     check_dir,
     create_parser,
@@ -21,13 +21,6 @@ from openstl.utils import (
     update_config,
 )
 
-
-try:
-    from PIL import Image
-except ImportError as exc:  # pragma: no cover - handled at runtime
-    raise ImportError(
-        'Pillow is required to export prediction images. '
-        'Please install it with `pip install pillow`.') from exc
 
 try:
     import nni
@@ -104,72 +97,26 @@ def _to_numpy(array) -> np.ndarray:
     return np.asarray(array)
 
 
-def _normalize_to_uint8(arr: np.ndarray) -> np.ndarray:
-    data = np.asarray(arr, dtype=np.float32)
-    data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
-    data_min = float(data.min())
-    data = data - data_min
-    data_max = float(data.max())
-    if data_max > 0:
-        data = data / data_max
-    data = (data * 255.0).clip(0, 255).astype(np.uint8)
-    return data
 
-def _to_pil_image(volume: np.ndarray) -> Image.Image:
-    if volume.ndim == 2:
-        array = _normalize_to_uint8(volume)
-        return Image.fromarray(array, mode='L')
-
-    if volume.ndim != 3:
-        raise ValueError(f'Expected a 2-D array or 3-D volume, got {volume.shape}.')
-
-    channels_first = volume.shape[0] <= 4
-    if channels_first:
-        volume = np.moveaxis(volume, 0, -1)
-
-    if volume.shape[-1] == 1:
-        array = _normalize_to_uint8(volume[..., 0])
-        return Image.fromarray(array, mode='L')
-    if volume.shape[-1] == 3:
-        array = _normalize_to_uint8(volume)
-        return Image.fromarray(array, mode='RGB')
-
-    raise ValueError(
-        'Prediction has more than 3 channels. Consider saving channel-wise images '
-        f'or reduce the output dimension. Got shape {volume.shape}.')
-
-
-def _save_volume_as_images(
+def _save_volume_as_pfb(
     volume: np.ndarray,
     output_dir: str,
     base_name: str,
-    channel_suffix: bool,
-) -> List[str]:
+) -> str:
     os.makedirs(output_dir, exist_ok=True)
 
-    if volume.shape[0] in (1, 3):
-        image = _to_pil_image(volume)
-        path = os.path.join(output_dir, f'{base_name}.png')
-        image.save(path)
-        return [path]
-
-    paths: List[str] = []
-    for channel, slice_ in enumerate(volume):
-        image = _to_pil_image(slice_)
-        suffix = f'_c{channel}' if channel_suffix else ''
-        path = os.path.join(output_dir, f'{base_name}{suffix}.png')
-        image.save(path)
-        paths.append(path)
-    return paths
+    volume = np.asarray(volume, dtype=np.float32)
+    path = os.path.join(output_dir, f'{base_name}.pfb')
+    write_pfb(path, volume)
+    return path
 
 
 def _save_predictions(
     preds: np.ndarray,
     dataset,
     output_dir: str,
-    channel_suffix: bool,
-) -> List[Dict[str, Union[int, str, Sequence[str]]]]:
-    index: List[Dict[str, Union[int, str, Sequence[str]]]] = []
+) -> List[Dict[str, Union[int, str]]]:
+    index: List[Dict[str, Union[int, str]]] = []
 
     start_indices = getattr(dataset, 'start_indices', list(range(len(preds))))
     pre = getattr(dataset, 'pre', 0)
@@ -185,13 +132,13 @@ def _save_predictions(
             if files and 0 <= target_idx < len(files):
                 file_name = os.path.splitext(os.path.basename(files[target_idx]))[0]
                 base_name = f'{file_name}'
-            saved_paths = _save_volume_as_images(volume, output_dir, base_name, channel_suffix)
+            saved_paths = _save_volume_as_pfb(volume, output_dir, base_name)
             index.append({
                 'sample_index': sample_idx,
                 'time_index': int(target_idx),
                 'step_index': step_idx,
                 'file': base_name,
-                'images': saved_paths,
+                'pfb': saved_path,
             })
     return index
 
@@ -230,9 +177,7 @@ def main() -> None:
     parser.add_argument('--work-dir', type=str, help='Path to the trained experiment directory.')
     parser.add_argument('--checkpoint', type=str, help='Optional checkpoint path to load.')
     parser.add_argument('--output-dir', type=str,
-                        help='Directory to store exported prediction images. Defaults to <work_dir>/pred_result.')
-    parser.add_argument('--channel-suffix', action='store_true',
-                        help='Append channel indices to filenames even for single-channel outputs.')
+                        help='Directory to store exported prediction PFB files. Defaults to <work_dir>/pred_result.')
     parser.add_argument('--save-npz', action='store_true',
                         help='Also store raw prediction arrays as predictions.npz in the output directory.')
 
@@ -260,7 +205,7 @@ def main() -> None:
 
     saved_cfg = _load_saved_config(work_dir)
     preserved = {'device', 'dist', 'launcher', 'resume_from', 'auto_resume', 'test', 'inference',
-                 'work_dir', 'output_dir', 'checkpoint', 'channel_suffix', 'save_npz'}
+                 'work_dir', 'output_dir', 'checkpoint', 'save_npz'}
     for key, value in saved_cfg.items():
         if key not in preserved:
             config[key] = value
@@ -307,7 +252,7 @@ def main() -> None:
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    index = _save_predictions(preds, dataset, output_dir, channel_suffix=config.get('channel_suffix', False))
+    index = _save_predictions(preds, dataset, output_dir)
 
     if config.get('save_npz', False):
         np.savez_compressed(os.path.join(output_dir, 'predictions.npz'), preds=preds)
