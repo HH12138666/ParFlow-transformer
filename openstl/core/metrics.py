@@ -36,8 +36,8 @@ def RMSE(pred, true, spatial_norm=False):
     else:
         norm = pred.shape[-1] * pred.shape[-2] * pred.shape[-3]
         return np.sqrt(np.mean((pred-true)**2 / norm, axis=(0, 1)).sum())
-#修改
-def MAPE(pred, true, spatial_norm=False, eps=1e-6):
+
+def MAPE(pred, true, spatial_norm=False, eps=1e-8):
     denom = np.where(np.abs(true) < eps, eps, np.abs(true))
     percentage_error = np.abs((pred - true) / denom)
     if not spatial_norm:
@@ -76,11 +76,10 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
 
             if C_pred == C_mean:
                 
-                mean = mean.reshape(1, 1, -1, 1, 1)  # shape -> (1, 1, 7, 1, 1)
-                std  = std.reshape(1, 1, -1, 1, 1)   # shape -> (1, 1, 7, 1, 1)
+                mean = mean.reshape(1, 1, -1, 1, 1)  
+                std  = std.reshape(1, 1, -1, 1, 1)   
             else:
                 raise ValueError(f"Channel count mismatch: pred has {C_pred} channels, mean/std has {C_mean} channels.")
-        # 🔧 新增结束
 
         # 现在可以安全地做反标准化
         pred = pred * std + mean

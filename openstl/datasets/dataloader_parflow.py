@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 CROP_H = 144
-CROP_W = 252
+CROP_W = 248
 EPS = 1e-6
 
 
@@ -24,7 +24,7 @@ NORMALIZE = True
 NORMALIZE_TARGET = True
 STATS_PATH = './stats.npz'                  # 存放均值和方差的路径，如设 None 则不加载 './stats.npz'
 STATS_COMPUTE_SAMPLES = 0          # 计算均值和方差时使用的样本数量，如设 0 则不计算
-STATS_TIME_STRIDE = 1
+STATS_TIME_STRIDE = 5
 STATS_SPATIAL_STRIDE = 1
 MAX_FILES = None                    # 设为 None 表示使用全部文件；也可以设为 100 只用前100个
 CHANNELS = None    
@@ -215,7 +215,8 @@ class ParFlowDataset(Dataset):
             else:
                 self.mean = np.zeros((self.C,), dtype=np.float32)
                 self.std  = np.ones((self.C,), dtype=np.float32)
-
+        self.mean_t = torch.from_numpy(self.mean).view(1, self.C, 1, 1).float() if self.mean is not None else None
+        self.std_t  = torch.from_numpy(self.std ).view(1, self.C, 1, 1).float() if self.std  is not None else None
 
     def _build_time_indices(self, stride=1):
         n_train = int(self.num_frames * 0.70)
@@ -247,7 +248,7 @@ class ParFlowDataset(Dataset):
 
     def __getitem__(self, idx):
         t0 = self.start_indices[idx]
-        win = self._read_window(t0)  # [T, C, 128, 240]
+        win = self._read_window(t0)  
         x = win[: self.pre]
         y = win[self.pre : self.pre + self.aft]
 
@@ -266,14 +267,14 @@ def load_data(batch_size,
               val_batch_size,
               data_root,
               num_workers,
-              pre_seq_length = 9,
-              aft_seq_length = 1,
+              pre_seq_length = 7,
+              aft_seq_length = 7,
               in_shape: Optional[List[int]] = None,
               distributed = False,
               use_augment = False,
               use_prefetcher = False,
               drop_last = False,
-              stride=1):
+              stride=2):
     train_ds = ParFlowDataset(data_root, 'train', pre_seq_length, aft_seq_length,in_shape=in_shape,stride=stride, use_augment=use_augment)
     
     val_ds = ParFlowDataset(data_root, 'val', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
@@ -331,13 +332,13 @@ if __name__ == '__main__':
     dataloader_train, dataloader_vali, dataloader_test = \
         load_data(batch_size=1,
                   val_batch_size=1,
-                  data_root='data/',
+                  data_root='data/parflow_press',
                   num_workers=4,
                   pre_seq_length=9,
                   aft_seq_length=1)
     print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
     
-    '''
+
     print(len(dataloader_train),len(dataloader_vali),len(dataloader_test))
 
     for item in dataloader_train:
@@ -346,7 +347,7 @@ if __name__ == '__main__':
     for item in dataloader_test:
         print(item[0].shape, item[1].shape)
         break
-    '''
+
     
     
     

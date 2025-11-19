@@ -76,7 +76,7 @@ def create_parser():
     parser.add_argument('--config_file', '-c', default='configs/parflow/PredFormer.py', type=str,
                         help='Path to the default config file')
     parser.add_argument('--model_type', default=None, type=str,
-                        help='Name of model for SimVP (default: None)')
+                        help='Name of model for predformer (default: None)')
     parser.add_argument('--drop', type=float, default=0.0, help='Dropout rate(default: 0.)')
     # parser.add_argument('--drop_path', type=float, default=0.0, help='Drop path rate for SimVP (default: 0.)')
     parser.add_argument('--overwrite', action='store_true', default=False,

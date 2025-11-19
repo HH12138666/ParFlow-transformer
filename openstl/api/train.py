@@ -306,7 +306,7 @@ class BaseExperiment(object):
         num_updates = self._epoch * self.steps_per_epoch
         early_stop = False
         self.call_hook('before_train_epoch')
-
+        eta = 1.0  # PredRNN variants
         for epoch in range(self._epoch, self._max_epochs):
             if self._dist and hasattr(self.train_loader.sampler, 'set_epoch'):
                 self.train_loader.sampler.set_epoch(epoch)
@@ -396,7 +396,8 @@ class BaseExperiment(object):
         self._load_from_state_dict(torch.load(best_model_path))
 
         self.call_hook('before_val_epoch')
-        results = self.method.test_one_epoch(self, self.test_loader)
+        # 修改gather_data为True，以保存完整的预测结果
+        results = self.method.test_one_epoch(self, self.test_loader,gather_data=True)
         self.call_hook('after_val_epoch')
 
         if self._rank == 0:

@@ -2,13 +2,13 @@ method = 'PredFormer'
 
 model_config = {
     # press h w c
-    'height': 128,
-    'width': 240,
-    'num_channels': 7,
+    'height': 144,
+    'width': 248,
+    'num_channels': 10,
     
     # video length in and out
-    'pre_seq': 9,
-    'after_seq': 1,
+    'pre_seq': 6,
+    'after_seq': 6,
     # patch size
     'patch_size': 8,
     'dim': 256, 
@@ -20,6 +20,6 @@ model_config = {
     'drop_path': 0.25,
     'scale_dim': 2,
     # depth
-    'depth': 2,
-    'Ndepth': 4, # For FullAttention-8, for BinaryST, BinaryST, FacST, FacTS-4, for TST,STS-3, for TSST, STTS-2
+    'depth': 4,
+    'Ndepth': 6, # For FullAttention-8, for BinaryST, BinaryST, FacST, FacTS-4, for TST,STS-3, for TSST, STTS-2
 }
