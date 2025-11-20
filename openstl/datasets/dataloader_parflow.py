@@ -2,6 +2,7 @@ import os
 import re
 import glob
 import logging
+import random
 from typing import List, Optional, Tuple
 import numpy as np
 import torch
@@ -19,17 +20,22 @@ CROP_H = 144
 CROP_W = 248
 EPS = 1e-6
 
-
+#计算均值和方差相关设置
 NORMALIZE = True
 NORMALIZE_TARGET = True
 STATS_PATH = './stats.npz'                  # 存放均值和方差的路径，如设 None 则不加载 './stats.npz'
 STATS_COMPUTE_SAMPLES = 0          # 计算均值和方差时使用的样本数量，如设 0 则不计算
-STATS_TIME_STRIDE = 5
+STATS_TIME_STRIDE = 1
 STATS_SPATIAL_STRIDE = 1
 MAX_FILES = None                    # 设为 None 表示使用全部文件；也可以设为 100 只用前100个
 CHANNELS = None    
 
 OUTLIER_THRESHOLD = -10000.0    # 异常值阈值，低于该值的样本将被视为异常并排除在均值和方差计算之外
+
+#数据分割相关设置
+time_stride = 10    # 时间步长，用于数据分割
+
+
 
 def _natural_key(p):
     b = os.path.basename(p)
@@ -89,8 +95,28 @@ def _interpolate_outliers(arr, threshold = OUTLIER_THRESHOLD) :
             col[col_mask] = np.interp(invalid_idx, valid_idx, col[valid_idx])
 
     return flat.reshape(c, h, w)
+#新增
+def _build_patch_coords(height, width, patch_h, patch_w, patch_stride_h=None, patch_stride_w=None):
+    if patch_h is None or patch_w is None:
+        return [(0, 0)]
 
+    stride_h = patch_stride_h or patch_h
+    stride_w = patch_stride_w or patch_w
 
+    if patch_h > height or patch_w > width:
+        raise ValueError(
+            f"Patch size {(patch_h, patch_w)} exceeds frame size {(height, width)}."
+        )
+
+    coords_h = list(range(0, height - patch_h + 1, stride_h))
+    if not coords_h or coords_h[-1] != height - patch_h:
+        coords_h.append(height - patch_h)
+
+    coords_w = list(range(0, width - patch_w + 1, stride_w))
+    if not coords_w or coords_w[-1] != width - patch_w:
+        coords_w.append(width - patch_w)
+
+    return [(top, left) for top in coords_h for left in coords_w]
 
 
 def _read_press_frame(path, target_h=CROP_H, target_w=CROP_W) :
@@ -136,8 +162,9 @@ def compute_mean_std(files,
         a = _read_press_frame(f, target_h, target_w)
         if channels is not None:
             a = a[channels, ...]
-        if spatial_stride > 1:
-            a = a[:, ::spatial_stride, ::spatial_stride]
+        #修改
+        #if spatial_stride > 1:
+        #    a = a[:, ::spatial_stride, ::spatial_stride]
         x = a.reshape(C, -1).astype(np.float64, copy=False)
         b_mean = x.mean(axis=1)
         diff   = x - b_mean[:, None]
@@ -168,7 +195,13 @@ def augment_pair(X, Y,
 
 class ParFlowDataset(Dataset):
 
-    def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape: Optional[List[int]] = None,stride=1,use_augment=False):
+    #def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape: Optional[List[int]] = None,use_augment=False):
+    def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape: Optional[List[int]] = None,stride=1,use_augment=False,
+                 patch_h: Optional[int] = None,
+                 patch_w: Optional[int] = None,
+                 patch_stride_h: Optional[int] = None,
+                 patch_stride_w: Optional[int] = None,
+                 random_patch: bool = False):
         super().__init__()
         split = str(split).lower()
         if split not in ('train', 'val', 'test'):
@@ -180,18 +213,35 @@ class ParFlowDataset(Dataset):
         self.aft = aft_seq_length
         self.total = self.pre + self.aft
         self.use_augment = use_augment
-
+        #修改
+        self.patch_h = patch_h
+        self.patch_w = patch_w
+        self.patch_stride_h = patch_stride_h
+        self.patch_stride_w = patch_stride_w
+        self.random_patch = random_patch
 
         self.files = _list_pfb_files(self.root)
         self.num_frames = len(self.files)
-
         sample = _read_press_frame(self.files[0], target_h=CROP_H, target_w=CROP_W)
         C, H, W = sample.shape
         self.C, self.H, self.W = C, H, W   
-        
+        #修改
+        self.use_patch = self.patch_h is not None and self.patch_w is not None
+        if self.use_patch:
+            self.patch_coords = _build_patch_coords(
+                self.H, self.W, self.patch_h, self.patch_w, self.patch_stride_h, self.patch_stride_w
+            )
+        else:
+            self.patch_coords = [(0, 0)]
 
-        self.start_indices = self._build_time_indices(stride=max(1, int(stride)))
-
+        self.start_indices = self._build_time_indices()
+        #修改
+        if self.use_patch and not (self.random_patch and self.split == 'train'):
+            self.sample_indices = [
+                (t, p) for t in self.start_indices for p in range(len(self.patch_coords))
+            ]
+        else:
+            self.sample_indices = self.start_indices
 
         self.mean = None
         self.std  = None
@@ -218,7 +268,7 @@ class ParFlowDataset(Dataset):
         self.mean_t = torch.from_numpy(self.mean).view(1, self.C, 1, 1).float() if self.mean is not None else None
         self.std_t  = torch.from_numpy(self.std ).view(1, self.C, 1, 1).float() if self.std  is not None else None
 
-    def _build_time_indices(self, stride=1):
+    def _build_time_indices(self, stride=time_stride):
         n_train = int(self.num_frames * 0.70)
         n_val   = int(self.num_frames * 0.15)
         def build_range(s, e):
@@ -235,8 +285,10 @@ class ParFlowDataset(Dataset):
             return build_range(n_train + n_val, self.num_frames)
 
     def __len__(self):
-        return len(self.start_indices)
-
+        #return len(self.start_indices)
+        #修改
+        return len(self.sample_indices)
+    
     def _read_window(self, t0):
         T = self.total
         out = torch.empty((T, self.C, self.H, self.W), dtype=torch.float32)
@@ -247,10 +299,28 @@ class ParFlowDataset(Dataset):
         return out
 
     def __getitem__(self, idx):
-        t0 = self.start_indices[idx]
-        win = self._read_window(t0)  
+        #t0 = self.start_indices[idx]
+        #win = self._read_window(t0)
+        #修改
+        if self.use_patch:
+            if self.random_patch and self.split == 'train':
+                t0 = self.start_indices[idx]
+                top, left = random.choice(self.patch_coords)
+            else:
+                t0, p_idx = self.sample_indices[idx]
+                top, left = self.patch_coords[p_idx]
+        else:
+            t0 = self.sample_indices[idx]
+            top, left = 0, 0
+        win = self._read_window(t0)
+          
         x = win[: self.pre]
         y = win[self.pre : self.pre + self.aft]
+        #修改
+        if self.use_patch:
+            x = x[..., top : top + self.patch_h, left : left + self.patch_w]
+            y = y[..., top : top + self.patch_h, left : left + self.patch_w]
+
 
         if self.use_augment and self.split == 'train':
             x, y = augment_pair(x, y)
@@ -274,13 +344,62 @@ def load_data(batch_size,
               use_augment = False,
               use_prefetcher = False,
               drop_last = False,
-              stride=2):
-    train_ds = ParFlowDataset(data_root, 'train', pre_seq_length, aft_seq_length,in_shape=in_shape,stride=stride, use_augment=use_augment)
+              #修改
+              patch_h: Optional[int] = None,
+              patch_w: Optional[int] = None,
+              patch_stride_h: Optional[int] = None,
+              patch_stride_w: Optional[int] = None,
+              random_patch: bool = False            
+              ):
+    #修改
+    '''
+    train_ds = ParFlowDataset(data_root, 'train', pre_seq_length, aft_seq_length,in_shape=in_shape, use_augment=use_augment)
     
-    val_ds = ParFlowDataset(data_root, 'val', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
+    val_ds = ParFlowDataset(data_root, 'val', pre_seq_length, aft_seq_length, in_shape=in_shape,use_augment=False)
 
-    test_ds = ParFlowDataset(data_root, 'test', pre_seq_length, aft_seq_length, in_shape=in_shape,stride=stride,use_augment=False)
-
+    test_ds = ParFlowDataset(data_root, 'test', pre_seq_length, aft_seq_length, in_shape=in_shape,use_augment=False)
+    '''
+    train_ds = ParFlowDataset(
+        data_root,
+        'train',
+        pre_seq_length,
+        aft_seq_length,
+        in_shape=in_shape,
+        use_augment=use_augment,
+        patch_h=patch_h,
+        patch_w=patch_w,
+        patch_stride_h=patch_stride_h,
+        patch_stride_w=patch_stride_w,
+        random_patch=random_patch,
+    )
+    val_ds = ParFlowDataset(
+        data_root,
+        'val',
+        pre_seq_length,
+        aft_seq_length,
+        in_shape=in_shape,
+        use_augment=False,
+        patch_h=patch_h,
+        patch_w=patch_w,
+        patch_stride_h=patch_stride_h,
+        patch_stride_w=patch_stride_w,
+        random_patch=random_patch,
+    )
+    test_ds = ParFlowDataset(
+        data_root,
+        'test',
+        pre_seq_length,
+        aft_seq_length,
+        in_shape=in_shape,
+        use_augment=False,
+        patch_h=patch_h,
+        patch_w=patch_w,
+        patch_stride_h=patch_stride_h,
+        patch_stride_w=patch_stride_w,
+        random_patch=random_patch,
+    )
+    
+    
     input_channels = train_ds.C
 
     train_loader = create_loader(
@@ -334,9 +453,9 @@ if __name__ == '__main__':
                   val_batch_size=1,
                   data_root='data/parflow_press',
                   num_workers=4,
-                  pre_seq_length=9,
-                  aft_seq_length=1)
-    print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
+                  pre_seq_length=6,
+                  aft_seq_length=6)
+    # print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
     
 
     print(len(dataloader_train),len(dataloader_vali),len(dataloader_test))

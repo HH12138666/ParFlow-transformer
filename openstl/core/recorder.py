@@ -11,7 +11,7 @@ class Recorder:
         self.decrease_time = 0
         self.early_stop_time = early_stop_time
 
-    def __call__(self, val_loss, model, path, early_stop=False):
+    def __call__(self, val_loss, model, path):
         score = -val_loss
         if self.best_score is None:
             self.best_score = score
@@ -22,8 +22,7 @@ class Recorder:
             self.decrease_time = 0
         else:
             self.decrease_time += 1
-        # return self.decrease_time <= self.early_stop_time if early_stop else 0
-        return True if early_stop else 0
+        return self.decrease_time >= self.early_stop_time
 
     def save_checkpoint(self, val_loss, model, path):
         if self.verbose:

@@ -9,8 +9,11 @@ import ast
 # 1. 从文件读取日志内容
 # -------------------------------
 log_file_path = 'work_dirs/ParFlow_press'  
-log_file_result = '2025-11-07-12-56_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep'
-log_file_name = f'train_20251107_125633.log'
+# 请根据实际情况修改log_file_result和log_file_name
+log_file_result = '2025-11-20-12-16_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep'
+log_file_name = f'train_20251120_121629.log'
+
+
 log_file_path_final = os.path.join(log_file_path, log_file_result, log_file_name)
 if not os.path.isfile(log_file_path_final):
     raise FileNotFoundError(f"日志文件不存在，请检查路径：{log_file_path_final}")

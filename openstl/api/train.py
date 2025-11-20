@@ -97,7 +97,7 @@ class BaseExperiment(object):
             # re-set gpu_ids with distributed training mode
             self._gpu_ids = range(self._world_size)
         self.device = self._acquire_device()
-        if self._early_stop <= self._max_epochs // 5:
+        if self._early_stop < 0:
             self._early_stop = self._max_epochs * 2
 
         # log and checkpoint
@@ -335,7 +335,9 @@ class BaseExperiment(object):
             if self._use_gpu and self.args.empty_cache:
                 torch.cuda.empty_cache()
             if epoch > self._early_stop and early_stop:  # early stop training
-                print_log('Early stop training at f{} epoch'.format(epoch))
+                #print_log('Early stop training at f{} epoch'.format(epoch))
+                print_log('Early stop training at {} epoch'.format(epoch + 1))
+                break
         
         if self.writer:
             self.writer.close()

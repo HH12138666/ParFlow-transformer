@@ -6,7 +6,7 @@ cd "$REPO"
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
 # 选择使用的GPU
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 CURRENT_TIME=$(date +"%Y-%m-%d-%H-%M")
 EX_NAME="ParFlow_press/${CURRENT_TIME}_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep"
 
@@ -17,7 +17,7 @@ python tools/train.py \
     --res_dir work_dirs \
     --batch_size 5 \
     --val_batch_size 5 \
-    --epoch 200 \
+    --epoch 100 \
     --overwrite \
     --lr 5e-4 \
     --sched cosine \
@@ -26,6 +26,6 @@ python tools/train.py \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
     --tb_dir logs_tb/11_19 \
-    --early_stop_epoch 10 
+    --early_stop_epoch 40 
 
 # nohup bash /home/huanghui/data/ParFlow-transformer/scripts/parflow/parflow_PredFormer_FacTS_train.sh > "train_log_2$(date +'%Y%m%d_%H%M%S').log" 2>&1 &
