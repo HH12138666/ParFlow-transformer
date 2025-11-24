@@ -1,5 +1,12 @@
 from parflow.tools.io import write_pfb
 import numpy as np, pathlib
+import os
+
+work_dir = '/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press/2025-11-18-11-19_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep/saved'
+path_inputs = os.path.join(work_dir,'inputs.npy')
+path_metrics = os.path.join(work_dir,'metrics.npy')
+path_preds = os.path.join(work_dir,'preds.npy')
+path_trues = os.path.join(work_dir,'trues.npy')
 
 out_dir = pathlib.Path('restored_preds')
 out_dir.mkdir(exist_ok=True)

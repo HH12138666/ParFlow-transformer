@@ -398,8 +398,7 @@ class BaseExperiment(object):
         self._load_from_state_dict(torch.load(best_model_path))
 
         self.call_hook('before_val_epoch')
-        # 修改gather_data为True，以保存完整的预测结果
-        results = self.method.test_one_epoch(self, self.test_loader,gather_data=True)
+        results = self.method.test_one_epoch(self, self.test_loader)
         self.call_hook('after_val_epoch')
 
         if self._rank == 0:
