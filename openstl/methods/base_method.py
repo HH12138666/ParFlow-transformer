@@ -115,8 +115,9 @@ class Base_method(object):
                 pred_y = self._predict(batch_x, batch_y)
 
             if gather_data:  # return raw datas
-                results.append(dict(zip(['inputs', 'preds', 'trues'],
-                                        [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy()])))
+                loss_value = self.criterion(pred_y, batch_y).detach().cpu().numpy().reshape(1)
+                results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
+                                        [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy(), loss_value])))
             else:  # return metrics
                 eval_res, _ = metric(pred_y.cpu().numpy(), batch_y.cpu().numpy(),
                                      data_loader.dataset.mean, data_loader.dataset.std,
@@ -164,8 +165,9 @@ class Base_method(object):
                 pred_y = self._predict(batch_x, batch_y)
 
             if gather_data:  # return raw datas
-                results.append(dict(zip(['inputs', 'preds', 'trues'],
-                                        [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy()])))
+                loss_value = self.criterion(pred_y, batch_y).detach().cpu().numpy().reshape(1)
+                results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
+                                        [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy(), loss_value])))
             else:  # return metrics
                 eval_res, _ = metric(pred_y.cpu().numpy(), batch_y.cpu().numpy(),
                                      data_loader.dataset.mean, data_loader.dataset.std,
@@ -185,7 +187,7 @@ class Base_method(object):
             results_all[k] = np.concatenate([batch[k] for batch in results], axis=0)
         return results_all
 
-    def vali_one_epoch(self, runner, vali_loader, **kwargs):
+    def vali_one_epoch(self, runner, vali_loader, gather_data=False, **kwargs):
         """Evaluate the model with val_loader.
 
         Args:
@@ -198,14 +200,15 @@ class Base_method(object):
         """
         self.model.eval()
         if self.dist and self.world_size > 1:
-            results = self._dist_forward_collect(vali_loader, len(vali_loader.dataset), gather_data=False)
+            results = self._dist_forward_collect(vali_loader, len(vali_loader.dataset), gather_data=gather_data)
         else:
-            results = self._nondist_forward_collect(vali_loader, len(vali_loader.dataset), gather_data=False)
+            results = self._nondist_forward_collect(vali_loader, len(vali_loader.dataset), gather_data=gather_data)
 
         eval_log = ""
+        
         for k, v in results.items():
-            v = v.mean()
             if k != "loss":
+                v = v.mean()
                 eval_str = f"{k}:{v.mean()}" if len(eval_log) == 0 else f", {k}:{v.mean()}"
                 eval_log += eval_str
 

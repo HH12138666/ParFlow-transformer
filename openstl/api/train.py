@@ -352,13 +352,26 @@ class BaseExperiment(object):
     def vali(self):
         """A validation loop during training"""
         self.call_hook('before_val_epoch')
-        results, eval_log = self.method.vali_one_epoch(self, self.vali_loader)
+        results, _ = self.method.vali_one_epoch(self, self.vali_loader,gather_data=True)
         self.call_hook('after_val_epoch')
-
+        
+        metric_list, spatial_norm, channel_names = self.args.metrics, True, None
+        
+        eval_res, eval_log = metric(results['preds'], results['trues'],
+                                    self.vali_loader.dataset.mean, self.vali_loader.dataset.std,
+                                    metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
+        results['metrics'] = np.array([eval_res['mae'], eval_res['mse'],eval_res['rmse'], eval_res['mape']])
+        
         if self._rank == 0:
             print_log('val\t '+eval_log)
-            if has_nni:
+            if has_nni and 'mse' in results:
                 nni.report_intermediate_result(results['mse'].mean())
+
+            folder_path = osp.join(self.path, 'val_saved')
+            check_dir(folder_path)
+            epoch_tag = f'epoch_{self._epoch + 1:03d}'
+            for np_data in ['inputs', 'trues', 'preds', 'metrics']:
+                np.save(osp.join(folder_path, f'{np_data}_{epoch_tag}.npy'), results[np_data])                        
 
         return results['loss'].mean()
 
@@ -369,7 +382,7 @@ class BaseExperiment(object):
             self._load_from_state_dict(torch.load(best_model_path))
 
         self.call_hook('before_val_epoch')
-        results = self.method.test_one_epoch(self, self.test_loader)
+        results = self.method.test_one_epoch(self, self.test_loader,gather_data=True)
         self.call_hook('after_val_epoch')
 
 

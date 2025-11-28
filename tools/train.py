@@ -51,7 +51,4 @@ if __name__ == '__main__':
     mse = exp.test()
     if rank == 0 and has_nni:
         nni.report_final_result(mse)
-    # 修改
-    if rank == 0:
-        print('>'*35 + ' inference  ' + '<'*35)
-    exp.inference()
+

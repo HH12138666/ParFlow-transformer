@@ -6,6 +6,13 @@ model_config = {
     'width': 248,
     'num_channels': 10,
     
+    # space stride
+    'space_h': 48,
+    'space_w': 84,
+    'space_stride_h': 24,
+    'space_stride_w': 42,
+    
+    
     # video length in and out
     'pre_seq': 6,
     'after_seq': 6,

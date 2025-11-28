@@ -25,7 +25,6 @@ python tools/train.py \
     --opt adamw \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
-    --tb_dir logs_tb/11_19 \
+    --tb_dir logs_tb/11_28 \
     --early_stop_epoch 40 
 
-# nohup bash /home/huanghui/data/ParFlow-transformer/scripts/parflow/parflow_PredFormer_FacTS_train.sh > "train_log_2$(date +'%Y%m%d_%H%M%S').log" 2>&1 &

@@ -1,7 +1,6 @@
 def load_data(dataname, batch_size, val_batch_size, num_workers, data_root, dist=False, **kwargs):
-    patch_h = kwargs.get('patch_h', None)
-    patch_w = kwargs.get('patch_w', None)
-    patching = patch_h is not None and patch_w is not None
+    space_h = kwargs.get('space_h', None)
+    space_w = kwargs.get('space_w', None)
     cfg_dataloader = dict(
         pre_seq_length=kwargs.get('pre_seq_length', 9),
         aft_seq_length=kwargs.get('aft_seq_length', 1),
@@ -10,12 +9,10 @@ def load_data(dataname, batch_size, val_batch_size, num_workers, data_root, dist
         use_augment=kwargs.get('use_augment', False),
         use_prefetcher=kwargs.get('use_prefetcher', False),
         drop_last=kwargs.get('drop_last', False),
-        patch_h=patch_h,
-        patch_w=patch_w,
-        patch_stride_h=kwargs.get('patch_stride_h', None),
-        patch_stride_w=kwargs.get('patch_stride_w', None),
-        random_patch=kwargs.get('random_patch', False),
-        return_patch_coords=kwargs.get('return_patch_coords', patching),
+        space_h=space_h,
+        space_w=space_w,
+        space_stride_h=kwargs.get('space_stride_h', None),
+        space_stride_w=kwargs.get('space_stride_w', None),
     )
     if dataname == 'parflow':
         from .dataloader_parflow import load_data
