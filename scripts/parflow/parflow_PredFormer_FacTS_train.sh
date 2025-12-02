@@ -17,7 +17,7 @@ python tools/train.py \
     --res_dir work_dirs \
     --batch_size 5 \
     --val_batch_size 5 \
-    --epoch 100 \
+    --epoch 20 \
     --overwrite \
     --lr 5e-4 \
     --sched cosine \

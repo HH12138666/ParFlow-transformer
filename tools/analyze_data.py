@@ -10,8 +10,8 @@ import ast
 # -------------------------------
 log_file_path = 'work_dirs/ParFlow_press'  
 # 请根据实际情况修改log_file_result和log_file_name
-log_file_result = '2025-11-20-12-16_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep'
-log_file_name = f'train_20251120_121629.log'
+log_file_result = '2025-11-28-18-07_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep'
+log_file_name = f'train_20251128_180728.log'
 
 
 log_file_path_final = os.path.join(log_file_path, log_file_result, log_file_name)

@@ -165,6 +165,7 @@ class Base_method(object):
                 pred_y = self._predict(batch_x, batch_y)
 
             if gather_data:  # return raw datas
+                print(f'gather_data is True')
                 loss_value = self.criterion(pred_y, batch_y).detach().cpu().numpy().reshape(1)
                 results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
                                         [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy(), loss_value])))

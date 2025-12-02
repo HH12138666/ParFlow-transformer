@@ -12,7 +12,7 @@ model_config = {
     'space_stride_h': 24,
     'space_stride_w': 42,
     
-    
+
     # video length in and out
     'pre_seq': 6,
     'after_seq': 6,
