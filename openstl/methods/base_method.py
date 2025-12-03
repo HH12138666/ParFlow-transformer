@@ -140,6 +140,7 @@ class Base_method(object):
             results_gathered = gather_tensors_batch(results_cat, part_size=min(part_size*8, 16))
             results_strip = np.concatenate(results_gathered, axis=0)[:length]
             results_all[k] = results_strip
+        results_all = self._merge_spatial_results(results_all, data_loader.dataset, gather_data)
         return results_all
 
     def _nondist_forward_collect(self, data_loader, length=None, gather_data=False):
@@ -165,11 +166,11 @@ class Base_method(object):
                 pred_y = self._predict(batch_x, batch_y)
 
             if gather_data:  # return raw datas
-                print(f'gather_data is True')
+                
                 loss_value = self.criterion(pred_y, batch_y).detach().cpu().numpy().reshape(1)
                 results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
                                         [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy(), loss_value])))
-            else:  # return metrics
+            else:  # evaluation-only path when we do not need to store raw tensors
                 eval_res, _ = metric(pred_y.cpu().numpy(), batch_y.cpu().numpy(),
                                      data_loader.dataset.mean, data_loader.dataset.std,
                                      metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
@@ -186,6 +187,48 @@ class Base_method(object):
         results_all = {}
         for k in results[0].keys():
             results_all[k] = np.concatenate([batch[k] for batch in results], axis=0)
+        results_all = self._merge_spatial_results(results_all, data_loader.dataset, gather_data)
+        return results_all
+
+    def _merge_spatial_results(self, results_all, dataset, gather_data):
+        """Reconstruct full-frame samples from spatially split patches.
+
+        Args:
+            results_all (dict): Concatenated outputs from the dataloader.
+            dataset: Dataset instance that may contain spatial split metadata.
+            gather_data (bool): Whether raw predictions were gathered.
+
+        Returns:
+            dict: Potentially merged results with full-frame tensors and updated loss/metrics.
+        """
+        if not gather_data:
+            return results_all
+
+        if not getattr(dataset, 'use_space', False) or not getattr(dataset, 'eval_non_overlap', False):
+            return results_all
+
+        num_sequences = len(dataset.time_indices)
+        sample_indices = getattr(dataset, 'sample_indices', [])
+        coords = getattr(dataset, 'space_coords', [(0, 0)])
+        if len(sample_indices) == 0 or len(results_all.get('preds', [])) != len(sample_indices):
+            return results_all
+
+        space_h = dataset.space_h
+        space_w = dataset.space_w
+        full_h, full_w = dataset.H, dataset.W
+
+        def _merge_tensor(arr, seq_len):
+            merged = np.zeros((num_sequences, seq_len, dataset.C, full_h, full_w), dtype=arr.dtype)
+            for idx, (t_idx, p_idx) in enumerate(sample_indices):
+                top, left = coords[p_idx]
+                merged[t_idx, :, :, top: top + space_h, left: left + space_w] = arr[idx]
+            return merged
+
+        if 'inputs' in results_all:
+            results_all['inputs'] = _merge_tensor(results_all['inputs'], dataset.pre)
+        results_all['preds'] = _merge_tensor(results_all['preds'], dataset.aft)
+        results_all['trues'] = _merge_tensor(results_all['trues'], dataset.aft)
+
         return results_all
 
     def vali_one_epoch(self, runner, vali_loader, gather_data=False, **kwargs):
@@ -200,22 +243,33 @@ class Base_method(object):
             eval_log(str): The string of metrics.
         """
         self.model.eval()
+        dataset = vali_loader.dataset
+        should_gather = gather_data or (getattr(dataset, 'use_space', False) and getattr(dataset, 'eval_non_overlap', False))
         if self.dist and self.world_size > 1:
-            results = self._dist_forward_collect(vali_loader, len(vali_loader.dataset), gather_data=gather_data)
+            results = self._dist_forward_collect(vali_loader, len(dataset), gather_data=should_gather)
         else:
-            results = self._nondist_forward_collect(vali_loader, len(vali_loader.dataset), gather_data=gather_data)
+            results = self._nondist_forward_collect(vali_loader, len(dataset), gather_data=should_gather)
 
         eval_log = ""
         
-        for k, v in results.items():
-            if k != "loss":
-                v = v.mean()
-                eval_str = f"{k}:{v.mean()}" if len(eval_log) == 0 else f", {k}:{v.mean()}"
-                eval_log += eval_str
+        if should_gather:
+            eval_res, eval_log = metric(results['preds'], results['trues'],
+                                        dataset.mean, dataset.std,
+                                        metrics=self.metric_list, spatial_norm=self.spatial_norm)
+            for k in self.metric_list:
+                results[k] = np.array(eval_res[k]).reshape(1)
+            results['metrics'] = np.array([eval_res['mae'], eval_res['mse'], eval_res['rmse'], eval_res['mape']])
+            results['metric_dict'] = eval_res
+        else:
+            for k, v in results.items():
+                if k != "loss":
+                    v = v.mean()
+                    eval_str = f"{k}:{v.mean()}" if len(eval_log) == 0 else f", {k}:{v.mean()}"
+                    eval_log += eval_str
 
         return results, eval_log
 
-    def test_one_epoch(self, runner, test_loader, **kwargs):
+    def test_one_epoch(self, runner, test_loader, gather_data=True, **kwargs):
         """Evaluate the model with test_loader.
 
         Args:
@@ -226,11 +280,34 @@ class Base_method(object):
             list(tensor, ...): The list of inputs and predictions.
         """
         self.model.eval()
-        if self.dist and self.world_size > 1:
-            results = self._dist_forward_collect(test_loader, gather_data=True)
-        else:
-            results = self._nondist_forward_collect(test_loader, gather_data=True)
+        dataset = test_loader.dataset
+        should_gather = gather_data or (getattr(dataset, 'use_space', False) and getattr(dataset, 'eval_non_overlap', False))
 
+        if self.dist and self.world_size > 1:
+            results = self._dist_forward_collect(test_loader, len(dataset), gather_data=should_gather)
+        else:
+            results = self._nondist_forward_collect(test_loader, len(dataset), gather_data=should_gather)
+            
+        eval_log = ""
+        if should_gather:
+            eval_res, eval_log = metric(results['preds'], results['trues'],
+                                        dataset.mean, dataset.std,
+                                        metrics=self.metric_list, spatial_norm=self.spatial_norm)
+            for k in self.metric_list:
+                results[k] = np.array(eval_res[k]).reshape(1)
+            results['metrics'] = np.array([eval_res['mae'], eval_res['mse'], eval_res['rmse'], eval_res['mape']])
+            results['metric_dict'] = eval_res
+        else:
+            for k, v in results.items():
+                if k in {"inputs", "preds", "trues"}:
+                    continue
+                if k != "loss":
+                    v = v.mean()
+                    eval_str = f"{k}:{v.mean()}" if len(eval_log) == 0 else f", {k}:{v.mean()}"
+                    eval_log += eval_str
+
+        results['eval_log'] = eval_log
+        
         return results
 
     def current_lr(self) -> Union[List[float], Dict[str, List[float]]]:

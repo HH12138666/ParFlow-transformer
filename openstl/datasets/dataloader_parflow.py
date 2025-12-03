@@ -193,13 +193,13 @@ def augment_pair(X, Y,
 
 
 class ParFlowDataset(Dataset):
-
-    #def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape: Optional[List[int]] = None,use_augment=False):
-    def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape: Optional[List[int]] = None,stride=1,use_augment=False,
+    # def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape = None,stride=1,use_augment=False,
+    def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,use_augment=False,
                  space_h = None,
                  space_w = None,
                  space_stride_h = None,
-                 space_stride_w = None,):
+                 space_stride_w = None,
+                 eval_non_overlap=True,):
         super().__init__()
         split = str(split).lower()
         if split not in ('train', 'val', 'test'):
@@ -214,9 +214,22 @@ class ParFlowDataset(Dataset):
         #修改
         self.space_h = space_h
         self.space_w = space_w
-        self.space_stride_h = space_stride_h
-        self.space_stride_w = space_stride_w
+        self.eval_non_overlap = eval_non_overlap
         self.use_space = self.space_h is not None and self.space_w is not None
+        
+        if self.use_space:
+            if self.split != 'train' and self.eval_non_overlap:
+                # 在验证和测试阶段使用不重叠的滑动窗口
+                self.space_stride_h = self.space_h
+                self.space_stride_w = self.space_w
+            else:
+                # 训练阶段保持可配置的重叠窗口
+                self.space_stride_h = space_stride_h or self.space_h
+                self.space_stride_w = space_stride_w or self.space_w
+        else:
+            self.space_stride_h = None
+            self.space_stride_w = None
+
 
         self.files = _list_pfb_files(self.root)
         self.num_frames = len(self.files)
@@ -232,15 +245,15 @@ class ParFlowDataset(Dataset):
         else:
             self.space_coords = [(0, 0)]
 
-        self.start_indices = self._build_time_indices()
+        self.time_indices = self._build_time_indices()
         
         #修改
         if self.use_space:
             self.sample_indices = [
-                (t, p) for t in self.start_indices for p in range(len(self.space_coords))
+                (t, p) for t in self.time_indices for p in range(len(self.space_coords))
             ]
         else:
-            self.sample_indices = self.start_indices
+            self.sample_indices = self.time_indices
 
         self.mean = None
         self.std  = None
@@ -283,11 +296,9 @@ class ParFlowDataset(Dataset):
         else:
             return build_range(n_train + n_val, self.num_frames)
 
-    def __len__(self):
-        #return len(self.start_indices)
-        #修改
+    def __len__(self):      
         return len(self.sample_indices)
-    
+    # 按时间窗口读取数据确保时间连续   
     def _read_window(self, t0):
         T = self.total
         out = torch.empty((T, self.C, self.H, self.W), dtype=torch.float32)
@@ -298,9 +309,7 @@ class ParFlowDataset(Dataset):
         return out
 
     def __getitem__(self, idx):
-        #t0 = self.start_indices[idx]
-        #win = self._read_window(t0)
-        #修改
+
         if self.use_space:
             t0, p_idx = self.sample_indices[idx]
             top, left = self.space_coords[p_idx]
@@ -311,11 +320,10 @@ class ParFlowDataset(Dataset):
           
         x = win[: self.pre]
         y = win[self.pre : self.pre + self.aft]
-        #修改
+        
         if self.use_space:
             x = x[..., top : top + self.space_h, left : left + self.space_w]
             y = y[..., top : top + self.space_h, left : left + self.space_w]
-
 
         if self.use_augment and self.split == 'train':
             x, y = augment_pair(x, y)
@@ -334,60 +342,52 @@ def load_data(batch_size,
               num_workers,
               pre_seq_length = 7,
               aft_seq_length = 7,
-              in_shape: Optional[List[int]] = None,
               distributed = False,
               use_augment = False,
               use_prefetcher = False,
               drop_last = False,
-              #修改
               space_h = None,
               space_w = None,
               space_stride_h= None,
-              space_stride_w= None,           
+              space_stride_w= None, 
+              eval_non_overlap=True,          
               ):
-    #修改
-    '''
-    train_ds = ParFlowDataset(data_root, 'train', pre_seq_length, aft_seq_length,in_shape=in_shape, use_augment=use_augment)
-    
-    val_ds = ParFlowDataset(data_root, 'val', pre_seq_length, aft_seq_length, in_shape=in_shape,use_augment=False)
 
-    test_ds = ParFlowDataset(data_root, 'test', pre_seq_length, aft_seq_length, in_shape=in_shape,use_augment=False)
-    '''
     train_ds = ParFlowDataset(
         data_root,
         'train',
         pre_seq_length,
         aft_seq_length,
-        in_shape=in_shape,
         use_augment=use_augment,
         space_h=space_h,
         space_w=space_w,
         space_stride_h=space_stride_h,
         space_stride_w=space_stride_w,
+        eval_non_overlap=eval_non_overlap,
     )
     val_ds = ParFlowDataset(
         data_root,
         'val',
         pre_seq_length,
         aft_seq_length,
-        in_shape=in_shape,
         use_augment=False,
         space_h=space_h,
         space_w=space_w,
         space_stride_h=space_stride_h,
         space_stride_w=space_stride_w,
+        eval_non_overlap=eval_non_overlap,
     )
     test_ds = ParFlowDataset(
         data_root,
         'test',
         pre_seq_length,
         aft_seq_length,
-        in_shape=in_shape,
         use_augment=False,
         space_h=space_h,
         space_w=space_w,
         space_stride_h=space_stride_h,
         space_stride_w=space_stride_w,
+        eval_non_overlap=eval_non_overlap,
     )
 
     input_channels = train_ds.C
@@ -445,7 +445,8 @@ if __name__ == '__main__':
                   space_h=48,
                   space_w=84,
                   space_stride_h=24,
-                  space_stride_w=42, 
+                  space_stride_w=42,
+                  eval_non_overlap=True 
                   )
     # print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
     
