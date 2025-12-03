@@ -26,5 +26,5 @@ python tools/train.py \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
     --tb_dir logs_tb/11_28 \
-    --early_stop_epoch 40 
+
 

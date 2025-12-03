@@ -64,6 +64,13 @@ def create_parser():
                         help='Whether to use prefetcher for faster data loading')
     parser.add_argument('--drop_last', action='store_true', default=False,
                         help='Whether to drop the last batch in the val data loading')
+    # ParFlow tiling parameters
+    parser.add_argument('--space_h', default=48, type=int, help='Spatial crop height for ParFlow tiling')
+    parser.add_argument('--space_w', default=84, type=int, help='Spatial crop width for ParFlow tiling')
+    parser.add_argument('--space_stride_h', default=24, type=int, help='Vertical stride for ParFlow tiling')
+    parser.add_argument('--space_stride_w', default=42, type=int, help='Horizontal stride for ParFlow tiling')
+    parser.add_argument('--eval_non_overlap', action='store_true', default=False,
+                        help='Use non-overlapping crops at evaluation time')   
 
     # method parameters
     parser.add_argument('--method', '-m', default='predformer', type=str,
@@ -182,6 +189,12 @@ def default_parser():
         'use_augment': False,
         'use_prefetcher': False,
         'drop_last': False,
+        # ParFlow tiling parameters
+        'space_h': 48,  
+        'space_w': 84,
+        'space_stride_h': 24,
+        'space_stride_w': 42,
+        'eval_non_overlap': False,
         # method parameters
         'method': 'SimVP',
         'config_file': 'configs/parflow/PredFormer.py',

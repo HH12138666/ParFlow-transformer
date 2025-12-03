@@ -11,13 +11,13 @@ model_config = {
     'space_w': 84,
     'space_stride_h': 24,
     'space_stride_w': 42,
+    'eval_non_overlap': True,
     
-
     # video length in and out
     'pre_seq': 6,
     'after_seq': 6,
     # patch size
-    'patch_size': 8,
+    'patch_size': 4,
     'dim': 256, 
     'heads': 8,
     'dim_head': 32,
