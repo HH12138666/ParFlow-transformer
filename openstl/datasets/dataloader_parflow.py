@@ -194,12 +194,11 @@ def augment_pair(X, Y,
 
 class ParFlowDataset(Dataset):
     # def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape = None,stride=1,use_augment=False,
-    def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,use_augment=False,
+    def __init__(self, data_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape = None,use_augment=False,
                  space_h = None,
                  space_w = None,
                  space_stride_h = None,
-                 space_stride_w = None,
-                 eval_non_overlap=True,):
+                 space_stride_w = None,):
         super().__init__()
         split = str(split).lower()
         if split not in ('train', 'val', 'test'):
@@ -214,18 +213,13 @@ class ParFlowDataset(Dataset):
         #修改
         self.space_h = space_h
         self.space_w = space_w
-        self.eval_non_overlap = eval_non_overlap
         self.use_space = self.space_h is not None and self.space_w is not None
         
         if self.use_space:
-            if self.split != 'train' and self.eval_non_overlap:
-                # 在验证和测试阶段使用不重叠的滑动窗口
-                self.space_stride_h = self.space_h
-                self.space_stride_w = self.space_w
-            else:
-                # 训练阶段保持可配置的重叠窗口
-                self.space_stride_h = space_stride_h or self.space_h
-                self.space_stride_w = space_stride_w or self.space_w
+            # Always honor the configured stride so overlapping crops can be
+            # used consistently across train/val/test.
+            self.space_stride_h = space_stride_h or self.space_h
+            self.space_stride_w = space_stride_w or self.space_w
         else:
             self.space_stride_h = None
             self.space_stride_w = None
@@ -342,6 +336,7 @@ def load_data(batch_size,
               num_workers,
               pre_seq_length = 7,
               aft_seq_length = 7,
+              in_shape = None,
               distributed = False,
               use_augment = False,
               use_prefetcher = False,
@@ -349,8 +344,7 @@ def load_data(batch_size,
               space_h = None,
               space_w = None,
               space_stride_h= None,
-              space_stride_w= None, 
-              eval_non_overlap=True,          
+              space_stride_w= None,         
               ):
 
     train_ds = ParFlowDataset(
@@ -358,36 +352,36 @@ def load_data(batch_size,
         'train',
         pre_seq_length,
         aft_seq_length,
+        in_shape=in_shape,
         use_augment=use_augment,
         space_h=space_h,
         space_w=space_w,
         space_stride_h=space_stride_h,
         space_stride_w=space_stride_w,
-        eval_non_overlap=eval_non_overlap,
     )
     val_ds = ParFlowDataset(
         data_root,
         'val',
         pre_seq_length,
         aft_seq_length,
+        in_shape=in_shape,
         use_augment=False,
         space_h=space_h,
         space_w=space_w,
         space_stride_h=space_stride_h,
         space_stride_w=space_stride_w,
-        eval_non_overlap=eval_non_overlap,
     )
     test_ds = ParFlowDataset(
         data_root,
         'test',
         pre_seq_length,
         aft_seq_length,
+        in_shape=in_shape,
         use_augment=False,
         space_h=space_h,
         space_w=space_w,
         space_stride_h=space_stride_h,
         space_stride_w=space_stride_w,
-        eval_non_overlap=eval_non_overlap,
     )
 
     input_channels = train_ds.C
@@ -446,7 +440,6 @@ if __name__ == '__main__':
                   space_w=84,
                   space_stride_h=24,
                   space_stride_w=42,
-                  eval_non_overlap=True 
                   )
     # print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
     

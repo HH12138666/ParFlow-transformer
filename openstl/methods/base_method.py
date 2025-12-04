@@ -204,14 +204,30 @@ class Base_method(object):
         if not gather_data:
             return results_all
 
-        if not getattr(dataset, 'use_space', False) or not getattr(dataset, 'eval_non_overlap', False):
+        if not getattr(dataset, 'use_space', False):
             return results_all
 
-        num_sequences = len(dataset.time_indices)
         sample_indices = getattr(dataset, 'sample_indices', [])
         coords = getattr(dataset, 'space_coords', [(0, 0)])
-        if len(sample_indices) == 0 or len(results_all.get('preds', [])) != len(sample_indices):
+        sample_count = len(results_all.get('preds', []))
+        if len(sample_indices) == 0 or sample_count == 0:
             return results_all
+
+        # Align to the actually collected samples to avoid indexing errors
+
+        if sample_count != len(sample_indices):
+            sample_indices = sample_indices[:sample_count]
+
+        # Build a robust mapping from raw time indices to contiguous slots
+        # based on the actually available samples.
+        if sample_indices and isinstance(sample_indices[0], tuple):
+            time_slots = sorted({t for t, _ in sample_indices})
+        else:
+            time_slots = sorted(set(sample_indices))
+
+        time_to_slot = {t: i for i, t in enumerate(time_slots)}
+        num_sequences = len(time_slots)
+
 
         space_h = dataset.space_h
         space_w = dataset.space_w
@@ -220,11 +236,14 @@ class Base_method(object):
         def _merge_tensor(arr, seq_len):
             merged = np.zeros((num_sequences, seq_len, dataset.C, full_h, full_w), dtype=arr.dtype)
             counts = np.zeros_like(merged, dtype=np.int32)
-            for idx, (t_idx, p_idx) in enumerate(sample_indices):
+
+            for idx, (t_idx, p_idx) in enumerate(sample_indices[: len(arr)]):
+                slot = time_to_slot.get(t_idx)
+                if slot is None:
+                    continue
                 top, left = coords[p_idx]
-                merged[t_idx, :, :, top: top + space_h, left: left + space_w] = arr[idx]
-                merged[t_idx, :, :, top: top + space_h, left: left + space_w] += arr[idx]
-                counts[t_idx, :, :, top: top + space_h, left: left + space_w] += 1
+                merged[slot, :, :, top: top + space_h, left: left + space_w] += arr[idx]
+                counts[slot, :, :, top: top + space_h, left: left + space_w] += 1
 
             # Avoid division-by-zero by keeping untouched regions at zero when no
             # tiles were written (should not happen for valid tiling setups).
@@ -252,7 +271,7 @@ class Base_method(object):
         """
         self.model.eval()
         dataset = vali_loader.dataset
-        should_gather = gather_data or (getattr(dataset, 'use_space', False) and getattr(dataset, 'eval_non_overlap', False))
+        should_gather = gather_data or getattr(dataset, 'use_space', False)
         if self.dist and self.world_size > 1:
             results = self._dist_forward_collect(vali_loader, len(dataset), gather_data=should_gather)
         else:
@@ -289,7 +308,7 @@ class Base_method(object):
         """
         self.model.eval()
         dataset = test_loader.dataset
-        should_gather = gather_data or (getattr(dataset, 'use_space', False) and getattr(dataset, 'eval_non_overlap', False))
+        should_gather = gather_data or getattr(dataset, 'use_space', False)
 
         if self.dist and self.world_size > 1:
             results = self._dist_forward_collect(test_loader, len(dataset), gather_data=should_gather)

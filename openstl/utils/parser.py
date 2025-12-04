@@ -69,8 +69,8 @@ def create_parser():
     parser.add_argument('--space_w', default=84, type=int, help='Spatial crop width for ParFlow tiling')
     parser.add_argument('--space_stride_h', default=24, type=int, help='Vertical stride for ParFlow tiling')
     parser.add_argument('--space_stride_w', default=42, type=int, help='Horizontal stride for ParFlow tiling')
-    parser.add_argument('--eval_non_overlap', action='store_true', default=False,
-                        help='Use non-overlapping crops at evaluation time')   
+    parser.add_argument('--val_save_stride', default=1, type=int,
+                        help='Subsample stride for saving merged validation samples (saving every N samples)')   
 
     # method parameters
     parser.add_argument('--method', '-m', default='predformer', type=str,
@@ -194,7 +194,7 @@ def default_parser():
         'space_w': 84,
         'space_stride_h': 24,
         'space_stride_w': 42,
-        'eval_non_overlap': False,
+        'val_save_stride': 1,       
         # method parameters
         'method': 'SimVP',
         'config_file': 'configs/parflow/PredFormer.py',

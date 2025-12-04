@@ -358,8 +358,13 @@ class BaseExperiment(object):
                 folder_path = osp.join(self.path, 'val_saved')
                 check_dir(folder_path)
                 epoch_tag = f'epoch_{self._epoch + 1:03d}'
+                save_stride = max(1, getattr(self.args, 'val_save_stride', 1))
+                save_indices = slice(None, None, save_stride)
                 for np_data in ['inputs', 'trues', 'preds', 'metrics']:
-                    np.save(osp.join(folder_path, f'{np_data}_{epoch_tag}.npy'), results[np_data])                        
+                    data_to_save = results[np_data]
+                    if np_data in {'inputs', 'trues', 'preds'} and save_stride > 1:
+                        data_to_save = data_to_save[save_indices]
+                    np.save(osp.join(folder_path, f'{np_data}_{epoch_tag}.npy'), data_to_save)                      
 
         return results['loss'].mean()
 

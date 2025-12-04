@@ -4,7 +4,20 @@ import matplotlib
 matplotlib.use('Agg')  # 无图形界面环境
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+#评估数据
+# ------------------- 路径和数据加载 -------------------
+work_dir = '/data/huanghui-data/ParFlow-transformer/work_dirs/ParFlow_press/2025-12-04-11-44_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep/val_saved'
+work_time = '2025-12-04-11-44'
+save_dir = os.path.join('/home/huanghui/data/ParFlow-transformer/pred_result', work_time)
+os.makedirs(save_dir, exist_ok=True)
+stats_path = '/data/huanghui-data/ParFlow-transformer/stats.npz'
 
+path_preds = os.path.join(work_dir, 'preds_epoch_001.npy')
+path_trues = os.path.join(work_dir, 'trues_epoch_001.npy')
+data_preds = np.load(path_preds)
+data_trues = np.load(path_trues)
+'''
+#测试数据
 # ------------------- 路径和数据加载 -------------------
 work_dir = '/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press/2025-11-20-12-42_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep/saved'
 work_time = '2025-11-20-12-42'
@@ -15,8 +28,7 @@ stats_path = '/data/huanghui-data/ParFlow-transformer/stats.npz'
 path_preds = os.path.join(work_dir, 'preds.npy')
 path_trues = os.path.join(work_dir, 'trues.npy')
 data_preds = np.load(path_preds)
-data_trues = np.load(path_trues)
-
+data_trues = np.load(path_trues)'''
 # ------------------- 反标准化 -------------------
 stats = np.load(stats_path)
 means = stats['mean']  # shape: (10,) 10个channel的均值
@@ -34,7 +46,7 @@ data_trues = data_trues * stds_5d + means_5d
 print(f"反标准化后数据范围: [{data_preds.min():.4f}, {data_preds.max():.4f}]")
 
 # ------------------- 选择一个批次进行查看 -------------------
-batch_idx = 7  
+batch_idx = 9  
 preds_batch = data_preds[batch_idx]  # ✅ shape: [6, 10, 144, 248]
 trues_batch = data_trues[batch_idx]  # ✅ shape: [6, 10, 144, 248]
 

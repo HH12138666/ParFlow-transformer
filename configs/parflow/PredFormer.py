@@ -2,8 +2,8 @@ method = 'PredFormer'
 
 model_config = {
     # press h w c
-    'height': 48,
-    'width': 84,
+    'height': 144,
+    'width': 248,
     'num_channels': 10,
     
     # space stride
@@ -11,7 +11,7 @@ model_config = {
     'space_w': 84,
     'space_stride_h': 24,
     'space_stride_w': 42,
-    'eval_non_overlap': True,
+    'val_save_stride': 20,
     
     # video length in and out
     'pre_seq': 6,
