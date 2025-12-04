@@ -257,8 +257,20 @@ class BaseExperiment(object):
     def display_method_info(self):
         """Plot the basic infomation of supported methods"""
         T, C, H, W = self.args.in_shape
+        # When spatial tiling is enabled, the model operates on cropped windows
+        # rather than the full frame size described by ``in_shape``. Use the
+        # configured spatial crop to build the dummy tensor for FLOP/FPS
+        # reporting so that positional embeddings match the actual model input
+        # shape, while keeping ``in_shape`` available for full-frame metadata
+        # (e.g., stitching tiles back together during evaluation).
+        crop_h = getattr(self.args, 'space_h', None)
+        crop_w = getattr(self.args, 'space_w', None)
+        use_crop = crop_h is not None and crop_w is not None
+        dummy_h = crop_h if use_crop else H
+        dummy_w = crop_w if use_crop else W
+
         if self.args.method in ['predformer']:
-            input_dummy = torch.ones(1, self.args.pre_seq_length, C, H, W).to(self.device)
+            input_dummy = torch.ones(1, self.args.pre_seq_length, C, dummy_h, dummy_w).to(self.device)
         else:
             raise ValueError(f'Invalid method name {self.args.method}')
 

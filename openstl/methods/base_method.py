@@ -219,9 +219,17 @@ class Base_method(object):
 
         def _merge_tensor(arr, seq_len):
             merged = np.zeros((num_sequences, seq_len, dataset.C, full_h, full_w), dtype=arr.dtype)
+            counts = np.zeros_like(merged, dtype=np.int32)
             for idx, (t_idx, p_idx) in enumerate(sample_indices):
                 top, left = coords[p_idx]
                 merged[t_idx, :, :, top: top + space_h, left: left + space_w] = arr[idx]
+                merged[t_idx, :, :, top: top + space_h, left: left + space_w] += arr[idx]
+                counts[t_idx, :, :, top: top + space_h, left: left + space_w] += 1
+
+            # Avoid division-by-zero by keeping untouched regions at zero when no
+            # tiles were written (should not happen for valid tiling setups).
+            mask = counts > 0
+            merged[mask] = merged[mask] / counts[mask]
             return merged
 
         if 'inputs' in results_all:

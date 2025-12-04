@@ -89,8 +89,12 @@ def sinusoidal_embedding(n_channels, dim):
 class PredFormer_Model(nn.Module):
     def __init__(self, model_config, **kwargs):
         super().__init__()
-        self.image_height = model_config['height']
-        self.image_width = model_config['width']
+        #修改点：加入空间裁剪后的高度和宽度
+        # When spatial tiling/cropping is enabled, use the cropped spatial
+        # dimensions for patching and positional embeddings so they match the
+        # runtime input shape.
+        self.image_height = model_config.get('space_h', model_config['height'])
+        self.image_width = model_config.get('space_w', model_config['width'])
         self.patch_size = model_config['patch_size']
         self.num_patches_h = self.image_height // self.patch_size
         self.num_patches_w = self.image_width // self.patch_size

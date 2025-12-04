@@ -2,8 +2,8 @@ method = 'PredFormer'
 
 model_config = {
     # press h w c
-    'height': 144,
-    'width': 248,
+    'height': 48,
+    'width': 84,
     'num_channels': 10,
     
     # space stride
