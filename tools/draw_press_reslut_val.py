@@ -6,14 +6,18 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 #评估数据
 # ------------------- 路径和数据加载 -------------------
-work_dir = '/data/huanghui-data/ParFlow-transformer/work_dirs/ParFlow_press/2025-12-04-11-44_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep/val_saved'
-work_time = '2025-12-04-11-44'
+work_dir = '/data/huanghui-data/ParFlow-transformer/work_dirs/ParFlow_press/'
+dir_name = '2025-12-04-13-05_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep/val_saved'
+work_dir = os.path.join(work_dir, dir_name)
+work_time = '2025-12-04-13-05'
+epoch = '097'
 save_dir = os.path.join('/home/huanghui/data/ParFlow-transformer/pred_result', work_time)
+save_dir = os.path.join(save_dir, f'epoch_{epoch}')
 os.makedirs(save_dir, exist_ok=True)
 stats_path = '/data/huanghui-data/ParFlow-transformer/stats.npz'
 
-path_preds = os.path.join(work_dir, 'preds_epoch_001.npy')
-path_trues = os.path.join(work_dir, 'trues_epoch_001.npy')
+path_preds = os.path.join(work_dir, f'preds_epoch_{epoch}.npy')
+path_trues = os.path.join(work_dir, f'trues_epoch_{epoch}.npy')
 data_preds = np.load(path_preds)
 data_trues = np.load(path_trues)
 '''
@@ -46,7 +50,7 @@ data_trues = data_trues * stds_5d + means_5d
 print(f"反标准化后数据范围: [{data_preds.min():.4f}, {data_preds.max():.4f}]")
 
 # ------------------- 选择一个批次进行查看 -------------------
-batch_idx = 9  
+batch_idx = 1
 preds_batch = data_preds[batch_idx]  # ✅ shape: [6, 10, 144, 248]
 trues_batch = data_trues[batch_idx]  # ✅ shape: [6, 10, 144, 248]
 
@@ -218,4 +222,4 @@ print(f"差值图固定使用手动指定范围: [{GLOBAL_DIFF_MIN}, {GLOBAL_DIF
 print(f"差值color bar刻度: -8, -6, -4, -2, 0, 2, 4, 6, 8")
 print("所有color bar都使用整数刻度")
 
-#python  /data/huanghui-data/ParFlow-transformer/tools/draw_press_reslut2.py
+#python  /data/huanghui-data/ParFlow-transformer/tools/draw_press_reslut_val.py

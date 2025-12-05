@@ -1,75 +1,85 @@
-import pandas as pd
-import matplotlib.pyplot as plt
+import datetime
+import glob
+import os
 
-# Ensure English text rendering
-plt.rcParams['font.family'] = 'DejaVu Sans'  # or any sans-serif font that supports English well
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+plt.rcParams['font.family'] = 'DejaVu Sans'
 plt.rcParams['axes.unicode_minus'] = False
 
-# 1. Load data
-file_path = '/data/huanghui-data/ParFlow-transformer/result_analyze'
-file_name = 'training_summary_2025-11-28_000.xlsx'
+
+def find_latest_xlsx(base_dir: str) -> str:
+    """Pick the most recent Excel file under base_dir."""
+    candidates = glob.glob(os.path.join(base_dir, '*.xlsx'))
+    if not candidates:
+        raise FileNotFoundError(f'No .xlsx files under {base_dir}')
+    return max(candidates, key=os.path.getmtime)
+
+
+# ----------------------------
+# 手动配置路径，后续自行修改
+# ----------------------------
+# dir_path: 你的 Excel 所在目录（collect_analyze_data.py 输出的 .xlsx）
+# excel_file: 如果想指定具体文件名，填入文件名；保持 None 则自动取目录下最新的 .xlsx
+# save_path: 图像保存目录
+# sheet_name: Excel 中的 Sheet 名
+dir_path = '/data/huanghui-data/ParFlow-transformer/result_analyze'
+excel_file = 'training_summary_2025-12-05_002.xlsx'  # e.g., 'training_summary_2025-12-05_000.xlsx'
 sheet_name = 'Epoch_Metrics'
-file_path = f"{file_path}/{file_name}"
-try:
-    df = pd.read_excel(file_path, sheet_name=sheet_name)
-except Exception as e:
-    print("Error reading file:", e)
-    exit()
-
-# 2. Check required columns
-required_cols = {'Epoch', 'Train Loss', 'Validation Loss', 'RMSE'}
-missing = required_cols - set(df.columns)
-if missing:
-    print("Missing columns:", missing)
-    exit()
-
-# 3. Plot RMSE (matching your first image)
-plt.figure(figsize=(12, 6))
-plt.plot(df['Epoch'], df['RMSE'], color='black', marker='.', linewidth=2, label='RMSE Press (m)')
-plt.title('RMSE Over Epochs')
-plt.xlabel('Epoch')
-plt.ylabel('RMSE Press (m)')
-plt.ylim(1.0, 5.0)      # Fixed y-range as in image
-plt.xlim(0, 100)        # Fixed x-range
-plt.grid(False)
-plt.legend(loc='upper right')  
-plt.xticks(range(0, 101, 10))  # ticks at 0, 10, 20, ..., 100
-plt.tight_layout()
-plt.savefig('rmse_plot_reference_style.png')
+save_path = '/data/huanghui-data/ParFlow-transformer/result_analyze/data_plots'
 
 
-# 4. Plot Train Loss and Validation Loss on dual Y-axis (matching your second image)
-fig, ax1 = plt.subplots(figsize=(12, 6))
+def main():
+    # 决定 Excel 路径
+    if excel_file:
+        excel_path = os.path.join(dir_path, excel_file)
+    elif os.path.isfile(dir_path):
+        excel_path = dir_path  # dir_path 指向具体文件时直接使用
+    else:
+        excel_path = find_latest_xlsx(dir_path)
 
-# Left Y-axis: Train Loss
-color_left = 'black'
-ax1.set_xlabel('Epoch')
-ax1.set_ylabel('Train Loss', color=color_left)
-line_train = ax1.plot(df['Epoch'], df['Train Loss'], color=color_left, marker='o', linewidth=2, label='Train Loss')
-ax1.tick_params(axis='y', labelcolor=color_left)
-ax1.set_ylim(0, 0.25)     # As in image
-ax1.set_xlim(0, 100)
-ax1.grid(True)
+    # 输出目录：按日期建子目录便于区分
+    out_root = os.path.join(save_path, datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(out_root, exist_ok=True)
 
-# Right Y-axis: Validation Loss
-ax2 = ax1.twinx()
-color_right = 'red'
-ax2.set_ylabel('Val Loss', color=color_right)
-line_val = ax2.plot(df['Epoch'], df['Validation Loss'], color=color_right, marker='s', linewidth=2, label='Val Loss')
-ax2.tick_params(axis='y', labelcolor=color_right)
-ax2.set_ylim(0.38, 0.43)  # As in image
+    df = pd.read_excel(excel_path, sheet_name=sheet_name)
 
-# Combine legends
-lines = line_train + line_val
-labels = [l.get_label() for l in lines]
-ax1.legend(lines, labels, loc='upper right')
+    required_cols = {'Epoch', 'Train Loss', 'Validation Loss', 'RMSE'}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f'Missing columns in sheet \"{sheet_name}\": {missing}')
 
-plt.title('Training and Validation Loss Over Epochs')
-plt.xticks(range(0, 101, 20))  # ticks at 0, 20, 40, 60, 80, 100
-plt.tight_layout()
-plt.savefig('loss_comparison_dual_axis.png')
-plt.show()
+    # 1) Train vs Validation Loss (同轴两条线)
+    plt.figure(figsize=(10, 5))
+    plt.plot(df['Epoch'], df['Train Loss'], label='Train Loss', color='steelblue', linewidth=2)
+    plt.plot(df['Epoch'], df['Validation Loss'], label='Validation Loss', color='tomato', linewidth=2)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Train vs Validation Loss')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    loss_path = os.path.join(out_root, excel_file + '_loss_epoch.png')
+    plt.savefig(loss_path, dpi=300)
 
-print("Plots generated:")
-print("  - rmse_plot_reference_style.png")
-print("  - loss_comparison_dual_axis.png")
+    # 2) RMSE 曲线
+    plt.figure(figsize=(10, 5))
+    plt.plot(df['Epoch'], df['RMSE'], label='RMSE', color='black', linewidth=2)
+    plt.xlabel('Epoch')
+    plt.ylabel('RMSE')
+    plt.title('RMSE Over Epochs')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    rmse_path = os.path.join(out_root, excel_file + '_rmse_epoch.png')
+    plt.savefig(rmse_path, dpi=300)
+
+    print('Plots saved:')
+    print(f'  Loss: {loss_path}')
+    print(f'  RMSE: {rmse_path}')
+
+
+if __name__ == '__main__':
+    main()

@@ -16,8 +16,6 @@ from .utils import create_loader
 logger = logging.getLogger(__name__)
 
 
-CROP_H = 144
-CROP_W = 248
 EPS = 1e-6
 
 #计算均值和方差相关设置
@@ -49,22 +47,6 @@ def _list_pfb_files(root) :
         raise FileNotFoundError(f'No .pfb files found under: {root}')
     return files
 
-
-def _center_crop_h(arr, target_h=CROP_H,target_w=CROP_W) :
-    c, h, w = arr.shape
-    if target_h is not None and h != target_h:
-        dh = h - target_h
-        if dh < 0:
-            raise ValueError(f"Need crop/pad to H={target_h}, but input H={h} < target.")
-        top = dh // 2 
-        arr = arr[:, top:top + target_h, :]
-    if target_w is not None and w != target_w:
-        dw = w - target_w
-        if dw < 0:
-            raise ValueError(f"Need crop/pad to W={target_w}, but input W={w} < target.")
-        left = dw // 2
-        arr = arr[:, :, left:left + target_w]
-    return arr
 
 def _interpolate_outliers(arr, threshold = OUTLIER_THRESHOLD) :
     """Replace outliers (< threshold) along the channel axis using interpolation."""
@@ -118,7 +100,7 @@ def _build_space_coords(height, width, space_h, space_w, space_stride_h=None, sp
     return [(top, left) for top in coords_h for left in coords_w]
 
 
-def _read_press_frame(path, target_h=CROP_H, target_w=CROP_W) :
+def _read_press_frame(path) :
 
     arr = read_pfb(get_absolute_path(path)).astype(np.float32)  # (C,H,W)
 
@@ -126,7 +108,6 @@ def _read_press_frame(path, target_h=CROP_H, target_w=CROP_W) :
     if arr.ndim != 3:
         raise ValueError(f'Expected 3D array per .pfb, got shape {arr.shape} for {path}')
 
-    arr = _center_crop_h(arr, target_h=target_h, target_w = target_w)  
     return arr
 
 #计算均值和方差
@@ -139,8 +120,6 @@ def _welford_update(count, mean, M2, batch_mean, batch_M2, batch_n):
     return count, mean, M2
 
 def compute_mean_std(files,
-                    target_h=CROP_H,
-                    target_w=CROP_W,
                     spatial_stride=1,
                     time_stride=1,
                     max_files=None,
@@ -148,7 +127,7 @@ def compute_mean_std(files,
     sel_files = files[::max(1, int(time_stride))]
     if max_files is not None:
         sel_files = sel_files[:int(max_files)]
-    a0 = _read_press_frame(sel_files[0], target_h, target_w)
+    a0 = _read_press_frame(sel_files[0])
     if channels is not None:
         a0 = a0[channels, ...]
     if spatial_stride > 1:
@@ -158,12 +137,9 @@ def compute_mean_std(files,
     mean  = np.zeros(C, dtype=np.float64)
     M2    = np.zeros(C, dtype=np.float64)
     for f in sel_files:
-        a = _read_press_frame(f, target_h, target_w)
+        a = _read_press_frame(f)
         if channels is not None:
             a = a[channels, ...]
-        #修改
-        #if spatial_stride > 1:
-        #    a = a[:, ::spatial_stride, ::spatial_stride]
         x = a.reshape(C, -1).astype(np.float64, copy=False)
         b_mean = x.mean(axis=1)
         diff   = x - b_mean[:, None]
@@ -210,7 +186,6 @@ class ParFlowDataset(Dataset):
         self.aft = aft_seq_length
         self.total = self.pre + self.aft
         self.use_augment = use_augment
-        #修改
         self.space_h = space_h
         self.space_w = space_w
         self.use_space = self.space_h is not None and self.space_w is not None
@@ -227,11 +202,10 @@ class ParFlowDataset(Dataset):
 
         self.files = _list_pfb_files(self.root)
         self.num_frames = len(self.files)
-        sample = _read_press_frame(self.files[0], target_h=CROP_H, target_w=CROP_W)
+        sample = _read_press_frame(self.files[0])
         C, H, W = sample.shape
         self.C, self.H, self.W = C, H, W   
         
-        #修改
         if self.use_space:
             self.space_coords = _build_space_coords(
                 self.H, self.W, self.space_h, self.space_w, self.space_stride_h, self.space_stride_w
@@ -241,7 +215,6 @@ class ParFlowDataset(Dataset):
 
         self.time_indices = self._build_time_indices()
         
-        #修改
         if self.use_space:
             self.sample_indices = [
                 (t, p) for t in self.time_indices for p in range(len(self.space_coords))
@@ -262,7 +235,6 @@ class ParFlowDataset(Dataset):
             elif STATS_COMPUTE_SAMPLES and STATS_COMPUTE_SAMPLES > 0:
                 self.mean, self.std = compute_mean_std(
                     self.files,
-                    target_h=CROP_H, target_w=CROP_W,
                     spatial_stride=STATS_SPATIAL_STRIDE,
                     time_stride=STATS_TIME_STRIDE,
                     max_files=STATS_COMPUTE_SAMPLES,
@@ -298,7 +270,7 @@ class ParFlowDataset(Dataset):
         out = torch.empty((T, self.C, self.H, self.W), dtype=torch.float32)
         for i in range(T):
             path = self.files[t0 + i]
-            arr = _read_press_frame(path, target_h=CROP_H, target_w=CROP_W)
+            arr = _read_press_frame(path)
             out[i] = torch.from_numpy(arr)
         return out
 
@@ -334,8 +306,8 @@ def load_data(batch_size,
               val_batch_size,
               data_root,
               num_workers,
-              pre_seq_length = 7,
-              aft_seq_length = 7,
+              pre_seq_length = 6,
+              aft_seq_length = 6,
               in_shape = None,
               distributed = False,
               use_augment = False,
@@ -430,16 +402,16 @@ if __name__ == '__main__':
     
     # 检查数据加载器和mean和std计算是否正确
     dataloader_train, dataloader_vali, dataloader_test = \
-        load_data(batch_size=10,
-                  val_batch_size=10,
+        load_data(batch_size=16,
+                  val_batch_size=16,
                   data_root='data/parflow_press',
                   num_workers=4,
                   pre_seq_length=6,
                   aft_seq_length=6,
-                  space_h=48,
-                  space_w=84,
-                  space_stride_h=24,
-                  space_stride_w=42,
+                  space_h=64,
+                  space_w=128,
+                  space_stride_h=32,
+                  space_stride_w=64,
                   )
     # print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
     
@@ -491,14 +463,14 @@ if __name__ == '__main__':
     '''
     # 计算均值和方差
     mean, std = compute_mean_std(
-        files = _list_pfb_files('data/')
+        files = _list_pfb_files('data/parflow_press/'),
     )
     print("=== 每个通道的 Mean 和 Std ===")
     C = mean.shape[0]
     for c in range(C):
         print(f"Channel {c}: Mean = {mean[c]:.6f}, Std = {std[c]:.6f}")
-    # np.savez(STATS_PATH, mean=mean, std=std)  # 保存为 stats.npz 文件
-    # print(f"✅ 均值和方差已保存到：{STATS_PATH}")
+    np.savez(STATS_PATH, mean=mean, std=std)  # 保存为 stats.npz 文件
+    print(f"✅ 均值和方差已保存到：{STATS_PATH}")
     '''
 
     '''
@@ -529,6 +501,3 @@ if __name__ == '__main__':
     print(f"🔍 总共读取了 {len(files)} 个 .pfb 文件")
     '''
 # python /home/huanghui/data/ParFlow-transformer/openstl/datasets/dataloader_parflow.py
-
-
-

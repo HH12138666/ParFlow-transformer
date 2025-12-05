@@ -65,11 +65,11 @@ def create_parser():
     parser.add_argument('--drop_last', action='store_true', default=False,
                         help='Whether to drop the last batch in the val data loading')
     # ParFlow tiling parameters
-    parser.add_argument('--space_h', default=48, type=int, help='Spatial crop height for ParFlow tiling')
-    parser.add_argument('--space_w', default=84, type=int, help='Spatial crop width for ParFlow tiling')
-    parser.add_argument('--space_stride_h', default=24, type=int, help='Vertical stride for ParFlow tiling')
-    parser.add_argument('--space_stride_w', default=42, type=int, help='Horizontal stride for ParFlow tiling')
-    parser.add_argument('--val_save_stride', default=1, type=int,
+    parser.add_argument('--space_h', default=None, type=int, help='Spatial crop height for ParFlow tiling')
+    parser.add_argument('--space_w', default=None, type=int, help='Spatial crop width for ParFlow tiling')
+    parser.add_argument('--space_stride_h', default=None, type=int, help='Vertical stride for ParFlow tiling')
+    parser.add_argument('--space_stride_w', default=None, type=int, help='Horizontal stride for ParFlow tiling')
+    parser.add_argument('--val_save_stride', default=None, type=int,
                         help='Subsample stride for saving merged validation samples (saving every N samples)')   
 
     # method parameters
@@ -190,11 +190,11 @@ def default_parser():
         'use_prefetcher': False,
         'drop_last': False,
         # ParFlow tiling parameters
-        'space_h': 48,  
-        'space_w': 84,
-        'space_stride_h': 24,
-        'space_stride_w': 42,
-        'val_save_stride': 1,       
+        'space_h': None,  
+        'space_w': None,
+        'space_stride_h': None,
+        'space_stride_w': None,
+        'val_save_stride': None,       
         # method parameters
         'method': 'SimVP',
         'config_file': 'configs/parflow/PredFormer.py',

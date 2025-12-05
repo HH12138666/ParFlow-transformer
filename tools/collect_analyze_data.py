@@ -10,8 +10,8 @@ import ast
 # -------------------------------
 log_file_path = 'work_dirs/ParFlow_press'  
 # 请根据实际情况修改log_file_result和log_file_name
-log_file_result = '2025-11-28-18-07_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep'
-log_file_name = f'train_20251128_180728.log'
+log_file_result = '2025-12-04-22-13_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep'
+log_file_name = f'train_20251204_221402.log'
 
 
 log_file_path_final = os.path.join(log_file_path, log_file_result, log_file_name)
@@ -39,7 +39,6 @@ def extract_config_params(log_text: str) -> Dict[str, object]:
         'use_augment': r'use_augment:\s*(True|False)',
         'epoch': r'epoch:\s*(\d+)',
         #'patch_size': r'patch_size:\s*(\d+)',
-        
         #'data_root': r'data_root:\s*(\S+)',
         #'dataname': r'dataname:\s*(\S+)',
         #'metrics': r'metrics:\s*\[([^\]]+)\]',
@@ -294,3 +293,5 @@ def main():
 # -------------------------------
 if __name__ == '__main__':
     main()
+    
+# python /data/huanghui-data/ParFlow-transformer/tools/collect_analyze_data.py

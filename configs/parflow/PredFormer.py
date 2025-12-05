@@ -2,15 +2,15 @@ method = 'PredFormer'
 
 model_config = {
     # press h w c
-    'height': 144,
-    'width': 248,
+    'height': 146,
+    'width': 252,
     'num_channels': 10,
     
     # space stride
-    'space_h': 48,
-    'space_w': 84,
-    'space_stride_h': 24,
-    'space_stride_w': 42,
+    'space_h': 64,
+    'space_w': 128,
+    'space_stride_h': 32,
+    'space_stride_w': 64,
     'val_save_stride': 20,
     
     # video length in and out
