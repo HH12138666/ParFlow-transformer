@@ -12,6 +12,8 @@ def load_data(dataname, batch_size, val_batch_size, num_workers, data_root, dist
         space_w=space_w,
         space_stride_h=kwargs.get('space_stride_h', None),
         space_stride_w=kwargs.get('space_stride_w', None),
+        evap_root=kwargs.get('evap_root', None),
+        evap_channels=kwargs.get('evap_channels', None),
     )
     if dataname == 'parflow':
         from .dataloader_parflow import load_data

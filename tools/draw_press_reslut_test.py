@@ -39,8 +39,8 @@ stds = stats['std']    # shape: (10,) 10个channel的标准差
 batch_size, time_steps, channels, height, width = data_preds.shape
 print(f"数据形状: batch_size={batch_size}, time_steps={time_steps}, channels={channels}, height={height}, width={width}")
 
-means_5d = means.reshape(1, 1, channels, 1, 1)  # (1, 1, 10, 1, 1)
-stds_5d = stds.reshape(1, 1, channels, 1, 1)    # (1, 1, 10, 1, 1)
+means_5d = means.reshape(1, 1, channels, 1, 1)  
+stds_5d = stds.reshape(1, 1, channels, 1, 1)    
 
 data_preds = data_preds * stds_5d + means_5d
 data_trues = data_trues * stds_5d + means_5d

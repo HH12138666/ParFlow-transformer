@@ -3,15 +3,19 @@ import re
 import pandas as pd
 from typing import Dict, List, Optional
 import datetime
-import ast  
+import ast
+import matplotlib.pyplot as plt
+
+plt.rcParams['font.family'] = 'DejaVu Sans'
+plt.rcParams['axes.unicode_minus'] = False
 
 # -------------------------------
 # 1. 从文件读取日志内容
 # -------------------------------
 log_file_path = 'work_dirs/ParFlow_press'  
 # 请根据实际情况修改log_file_result和log_file_name
-log_file_result = '2025-12-04-22-13_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep'
-log_file_name = f'train_20251204_221402.log'
+log_file_result = '2025-12-11-21-23_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep'
+log_file_name = f'train_20251211_212329.log'
 
 
 log_file_path_final = os.path.join(log_file_path, log_file_result, log_file_name)
@@ -237,8 +241,59 @@ def extract_final_test_metrics(log_text: str) -> Optional[Dict[str, float]]:
         }
     return None
 
+
 # -------------------------------
-# 5. 主函数：整合所有信息并导出 Excel
+# 5. 画图：生成 loss/RMSE 曲线
+# -------------------------------
+def plot_epoch_curves(
+    df_epochs: pd.DataFrame,
+    excel_path: str,
+    save_root: str = 'result_analyze/data_plots'
+) -> Dict[str, str]:
+    """
+    将收集好的 epoch 指标直接画图。
+    返回保存路径字典，便于后续打印。
+    """
+    required_cols = {'Epoch', 'Train Loss', 'Validation Loss', 'RMSE'}
+    missing = required_cols - set(df_epochs.columns)
+    if missing:
+        raise ValueError(f'缺少必要列，无法画图: {missing}')
+
+    today_dir = datetime.datetime.now().strftime('%Y-%m-%d')
+    out_dir = os.path.join(save_root, today_dir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    base_name = os.path.splitext(os.path.basename(excel_path))[0]
+
+    # Train vs Val Loss
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_epochs['Epoch'], df_epochs['Train Loss'], label='Train Loss', color='steelblue', linewidth=2)
+    plt.plot(df_epochs['Epoch'], df_epochs['Validation Loss'], label='Validation Loss', color='tomato', linewidth=2)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Train vs Validation Loss')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    loss_path = os.path.join(out_dir, base_name + '_loss_epoch.png')
+    plt.savefig(loss_path, dpi=300)
+
+    # RMSE 曲线
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_epochs['Epoch'], df_epochs['RMSE'], label='RMSE', color='black', linewidth=2)
+    plt.xlabel('Epoch')
+    plt.ylabel('Press RMSE (m)')
+    plt.title('RMSE Over Epochs')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    rmse_path = os.path.join(out_dir, base_name + '_rmse_epoch.png')
+    plt.savefig(rmse_path, dpi=300)
+
+    return {'loss_png': loss_path, 'rmse_png': rmse_path}
+
+# -------------------------------
+# 6. 主函数：整合所有信息并导出 Excel + 画图
 # -------------------------------
 def main():
     # 1. 提取配置参数
@@ -288,8 +343,14 @@ def main():
 
     print(f"✅ 所有数据已成功保存至 Excel 文件：{output_filename}")
 
+    # 6) 画图：直接基于刚写出的 Excel 进行绘图
+    plot_paths = plot_epoch_curves(df_epochs, output_filename)
+    print("✅ 曲线已绘制完成：")
+    print(f"   - Loss 曲线: {plot_paths['loss_png']}")
+    print(f"   - RMSE 曲线: {plot_paths['rmse_png']}")
+
 # -------------------------------
-# 6. 运行
+# 7. 运行
 # -------------------------------
 if __name__ == '__main__':
     main()

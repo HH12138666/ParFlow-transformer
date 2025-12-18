@@ -26,7 +26,7 @@ def find_latest_xlsx(base_dir: str) -> str:
 # save_path: 图像保存目录
 # sheet_name: Excel 中的 Sheet 名
 dir_path = '/data/huanghui-data/ParFlow-transformer/result_analyze'
-excel_file = 'training_summary_2025-12-05_002.xlsx'  # e.g., 'training_summary_2025-12-05_000.xlsx'
+excel_file = 'training_summary_2025-12-08_000.xlsx'  # e.g., 'training_summary_2025-12-05_000.xlsx'
 sheet_name = 'Epoch_Metrics'
 save_path = '/data/huanghui-data/ParFlow-transformer/result_analyze/data_plots'
 
@@ -68,7 +68,7 @@ def main():
     plt.figure(figsize=(10, 5))
     plt.plot(df['Epoch'], df['RMSE'], label='RMSE', color='black', linewidth=2)
     plt.xlabel('Epoch')
-    plt.ylabel('RMSE')
+    plt.ylabel('Press RMSE (m)')
     plt.title('RMSE Over Epochs')
     plt.grid(True, alpha=0.3)
     plt.legend()
@@ -83,3 +83,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# python /data/huanghui-data/ParFlow-transformer/tools/plot_result_data.py

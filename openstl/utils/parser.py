@@ -54,7 +54,7 @@ def create_parser():
     parser.add_argument('--data_root', default='./data')
     parser.add_argument('--dataname', '-d', default='parflow', type=str,
                         help='Dataset name (default: "parflow")')
-    parser.add_argument('--patch_size', default=4, type=int, help='Patch size for training')
+    parser.add_argument('--patch_size', default=None, type=int, help='Patch size for training')
     parser.add_argument('--pre_seq_length', default=None, type=int, help='Sequence length before prediction')
     parser.add_argument('--aft_seq_length', default=None, type=int, help='Sequence length after prediction')
     parser.add_argument('--total_length', default=None, type=int, help='Total Sequence length for prediction')
@@ -64,6 +64,10 @@ def create_parser():
                         help='Whether to use prefetcher for faster data loading')
     parser.add_argument('--drop_last', action='store_true', default=False,
                         help='Whether to drop the last batch in the val data loading')
+    parser.add_argument('--evap_root', default=None, type=str,
+                        help='Directory containing evaptrans .pfb files to append as extra channels')
+    parser.add_argument('--evap_channels', default=None, type=parse_list,
+                        help='Evaptrans channel indices to keep, e.g., [6,7,8,9]')
     # ParFlow tiling parameters
     parser.add_argument('--space_h', default=None, type=int, help='Spatial crop height for ParFlow tiling')
     parser.add_argument('--space_w', default=None, type=int, help='Spatial crop width for ParFlow tiling')
@@ -189,6 +193,8 @@ def default_parser():
         'use_augment': False,
         'use_prefetcher': False,
         'drop_last': False,
+        'evap_root': None,
+        'evap_channels': None,
         # ParFlow tiling parameters
         'space_h': None,  
         'space_w': None,

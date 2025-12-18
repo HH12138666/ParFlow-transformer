@@ -8,4 +8,4 @@ train_log_*
 check_data_figure/
 result_analyze/
 slurm-*
-
+debug_outliers/
