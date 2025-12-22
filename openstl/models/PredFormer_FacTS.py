@@ -101,8 +101,9 @@ class PredFormer_Model(nn.Module):
         self.num_patches = self.num_patches_h * self.num_patches_w
         self.num_frames_in = model_config['pre_seq']
         self.dim = model_config['dim']
-        self.num_channels = model_config['num_channels']
-        self.num_classes = self.num_channels
+        self.in_channels = model_config.get('in_channels', model_config.get('num_channels'))
+        self.out_channels = model_config.get('out_channels', self.in_channels)
+        self.num_classes = self.out_channels
         self.heads = model_config['heads']
         self.dim_head = model_config['dim_head']
         self.dropout = model_config['dropout']
@@ -114,7 +115,7 @@ class PredFormer_Model(nn.Module):
         
         assert self.image_height % self.patch_size == 0, 'Image height must be divisible by the patch size.'
         assert self.image_width % self.patch_size == 0, 'Image width must be divisible by the patch size.'
-        self.patch_dim = self.num_channels * self.patch_size ** 2
+        self.patch_dim = self.in_channels * self.patch_size ** 2
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b t c (h p1) (w p2) -> b t (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size),
             nn.Linear(self.patch_dim, self.dim),
@@ -129,12 +130,14 @@ class PredFormer_Model(nn.Module):
         
         self.mlp_head = nn.Sequential(
             nn.LayerNorm(self.dim),
-            nn.Linear(self.dim, self.num_channels * self.patch_size ** 2)
+            nn.Linear(self.dim, self.out_channels * self.patch_size ** 2)
             ) 
                 
 
     def forward(self, x):
         B, T, C, H, W = x.shape
+        if C != self.in_channels:
+            raise ValueError(f"Expected input channels={self.in_channels}, got {C}")
         
         # Patch Embedding
         x = self.to_patch_embedding(x)
@@ -157,8 +160,8 @@ class PredFormer_Model(nn.Module):
             
         # MLP head        
         x = self.mlp_head(x_ts.reshape(-1, self.dim))
-        x = x.view(B, T, self.num_patches_h, self.num_patches_w, C, self.patch_size, self.patch_size)
-        x = x.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, T, C, H, W)
+        x = x.view(B, T, self.num_patches_h, self.num_patches_w, self.out_channels, self.patch_size, self.patch_size)
+        x = x.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, T, self.out_channels, H, W)
         
         return x
     

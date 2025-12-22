@@ -4,18 +4,19 @@ model_config = {
     # press h w c
     'height': 146,
     'width': 252,
-    'num_channels': 14,  # 压力 10 层 + evaptrans 4 层
+    'in_channels': 74,   # 输入：压力 10 层 + evaptrans 4 层
+    'out_channels': 10,  # 输出：仅压力 10 层
     
     # space stride
     'space_h': 60,
     'space_w': 84,
     'space_stride_h': 30,
     'space_stride_w': 42,
-    'val_save_stride': 20,
+    'val_save_stride': 0,
     
     # video length in and out
-    'pre_seq': 15,
-    'after_seq': 45,
+    'pre_seq': 10,
+    'after_seq': 10,
     # patch size
     'patch_size': 4,
     'dim': 256, 

@@ -234,7 +234,10 @@ class Base_method(object):
         full_h, full_w = dataset.H, dataset.W
 
         def _merge_tensor(arr, seq_len):
-            merged = np.zeros((num_sequences, seq_len, dataset.C, full_h, full_w), dtype=arr.dtype)
+            if arr.size == 0:
+                return arr
+            channels = arr.shape[2]
+            merged = np.zeros((num_sequences, seq_len, channels, full_h, full_w), dtype=arr.dtype)
             counts = np.zeros_like(merged, dtype=np.int32)
 
             for idx, (t_idx, p_idx) in enumerate(sample_indices[: len(arr)]):

@@ -2,134 +2,73 @@ import argparse
 import os
 import numpy as np
 
-from openstl.datasets import dataset_parameters
-from openstl.utils import (show_video_gif_multiple, show_video_gif_single, show_video_line,
-                           show_taxibj, show_weather_bench)
+from openstl.utils import show_video_gif_multiple, show_video_gif_single
 
 
-def min_max_norm(data):
-    _min, _max = np.min(data), np.max(data)
-    data = (data - _min) / (_max - _min)
-    return data
+def _select_sample(arr, index):
+    if arr.ndim == 5:
+        return arr[index]
+    if arr.ndim in (3, 4):
+        return arr
+    raise ValueError(f"Unsupported array shape: {arr.shape}")
+
+
+def _select_channel(arr, channel):
+    if arr.ndim == 4:
+        if channel < 0 or channel >= arr.shape[1]:
+            raise ValueError(f"Channel index {channel} out of range for shape {arr.shape}")
+        return arr[:, channel, :, :]
+    if arr.ndim == 3:
+        return arr
+    raise ValueError(f"Unsupported array shape for channel selection: {arr.shape}")
+
+
+def _resolve_saved_dir(work_dir) :
+    if os.path.isfile(os.path.join(work_dir, 'preds.npy')):
+        return work_dir
+    saved_dir = os.path.join(work_dir, 'saved')
+    if os.path.isdir(saved_dir):
+        return saved_dir
+    raise FileNotFoundError(f"Cannot find saved dir under: {work_dir}")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Visualization of a STL model')
-
-    parser.add_argument('--dataname', '-d', default=None, type=str,
-                        help='The name of dataset (default: "parflow")')
-    parser.add_argument('--index', '-i', default=0, type=int, help='The index of a video sequence to show')
-    parser.add_argument('--work_dirs', '-w', default=None, type=str,
-                        help='Path to the work_dir or the path to a set of work_dirs')
-    parser.add_argument('--vis_dirs', '-v', action='store_true', default=False,
-                        help='Whether to visualize a set of work_dirs')
-    parser.add_argument('--reload_input', action='store_true', default=False,
-                        help='Whether to reload the input and true for each method')
-    parser.add_argument('--save_dirs', '-s', default='vis_figures', type=str,
+    parser = argparse.ArgumentParser(description='ParFlow GIF visualization (single method)')
+    parser.add_argument('--work_dir', '-w', required=True, type=str,
+                        help='Work directory that contains saved/inputs.npy, trues.npy, preds.npy')
+    parser.add_argument('--index', '-i', default=0, type=int,
+                        help='The index of a video sequence to show')
+    parser.add_argument('--vis_channel', '-vc', required=True, type=int,
+                        help='Select a channel to visualize')
+    parser.add_argument('--save_dir', '-s', default='vis_figures', type=str,
                         help='The path to save visualization results')
-    parser.add_argument('--vis_channel', '-vc', default=-1, type=int,
-                        help='Select a channel to visualize as the heatmap')
-
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    assert args.dataname is not None and args.work_dirs is not None, \
-        'The name of dataset and the path to work_dirs are required'
+    saved_dir = _resolve_saved_dir(args.work_dir)
+    if not os.path.isdir(args.save_dir):
+        os.makedirs(args.save_dir, exist_ok=True)
 
-    # setup results of the STL methods
-    base_dir = args.work_dirs
-    assert os.path.isdir(args.work_dirs)
-    if args.vis_dirs:
-        method_list = os.listdir(args.work_dirs)
-    else:
-        method_list = [args.work_dirs.split('/')[-1]]
-        base_dir = base_dir.split(method_list[0])[0]
+    inputs = np.load(os.path.join(saved_dir, 'inputs.npy'))
+    trues = np.load(os.path.join(saved_dir, 'trues.npy'))
+    preds = np.load(os.path.join(saved_dir, 'preds.npy'))
 
-    use_rgb = False 
-    config = args.__dict__
-    config.update(dataset_parameters[args.dataname])
-    idx, ncols = args.index, config['aft_seq_length']
-    if not os.path.isdir(args.save_dirs):
-        os.mkdir(args.save_dirs)
-    if args.vis_channel != -1:  # choose a channel
-        c_surfix = f"_C{args.vis_channel}"
-        assert 0 <= args.vis_channel <= config['in_shape'][1], 'Channel index out of range'
-    else:
-        c_surfix = ""
-        assert args.dataname not in ['parflow'], 'Please select a channel'
+    inputs = _select_sample(inputs, args.index)
+    trues = _select_sample(trues, args.index)
+    preds = _select_sample(preds, args.index)
 
-    # loading results
-    predicts_dict, inputs_dict, trues_dict = dict(), dict(), dict()
-    empty_keys = list()
-    for method in method_list:
-        try:
-            predicts_dict[method] = np.load(os.path.join(base_dir, method, 'saved/preds.npy'))
-            if 'weather' in args.dataname:
-                predicts_dict[method] = min_max_norm(predicts_dict[method])
-        except:
-            empty_keys.append(method)
-            print('Failed to read the results of', method)
-    assert len(predicts_dict.keys()) >= 1, 'The results should not be empty'
-    for k in empty_keys:
-        method_list.pop(method_list.index(k))
+    inputs = _select_channel(inputs, args.vis_channel)
+    trues = _select_channel(trues, args.vis_channel)
+    preds = _select_channel(preds, args.vis_channel)
 
-    for method in method_list:
-        inputs = np.load(os.path.join(base_dir, method_list[0], 'saved/inputs.npy'))
-        trues = np.load(os.path.join(base_dir, method_list[0], 'saved/trues.npy'))
-        if 'weather' in args.dataname:
-            inputs = min_max_norm(inputs)
-            trues = min_max_norm(trues)
-            inputs = show_weather_bench(inputs[idx, 0:ncols, ...], src_img=None, cmap='GnBu').transpose(0, 3, 1, 2)
-            trues = show_weather_bench(trues[idx, 0:ncols, ...], src_img=None, cmap='GnBu').transpose(0, 3, 1, 2)
-        elif 'taxibj' in args.dataname:
-            inputs = show_taxibj(inputs[idx, 0:ncols, ...], cmap='viridis').transpose(0, 3, 1, 2)
-            trues = show_taxibj(trues[idx, 0:ncols, ...], cmap='viridis').transpose(0, 3, 1, 2)
-        else:
-            inputs, trues = inputs[idx], trues[idx]
-        if not args.reload_input:  # load the input and true for each method
-            break
-        else:
-            inputs_dict[method], trues_dict[method] = inputs, trues
-
-    # plot gifs and figures of the STL methods
-    for i, method in enumerate(method_list):
-        print(method, predicts_dict[method][idx].shape)
-        if args.reload_input:
-            inputs, trues = inputs_dict[method], trues_dict[method]
-        if 'weather' in args.dataname:
-            preds = show_weather_bench(predicts_dict[method][idx, 0:ncols, ...],
-                                       src_img=None, cmap='GnBu', vis_channel=args.vis_channel)
-            preds = preds.transpose(0, 3, 1, 2)
-        elif 'taxibj' in args.dataname:
-            preds = show_taxibj(predicts_dict[method][idx, 0:ncols, ...],
-                                cmap='viridis', vis_channel=args.vis_channel)
-            preds = preds.transpose(0, 3, 1, 2)
-        else:
-            preds = predicts_dict[method][idx]
-
-        if i == 0:
-            show_video_line(inputs.copy(), ncols=config['pre_seq_length'], vmax=0.6, cbar=False,
-                out_path='{}/{}_input{}'.format(args.save_dirs, args.dataname+c_surfix, str(idx)+'.png'),
-                format='png', use_rgb=use_rgb)
-            show_video_line(trues.copy(), ncols=config['aft_seq_length'], vmax=0.6, cbar=False,
-                out_path='{}/{}_true{}'.format(args.save_dirs, args.dataname+c_surfix, str(idx)+'.png'),
-                format='png', use_rgb=use_rgb)
-            show_video_gif_single(inputs.copy(), use_rgb=use_rgb,
-                out_path='{}/{}_{}_{}_input'.format(args.save_dirs, args.dataname+c_surfix, method, idx))
-            show_video_gif_single(trues.copy(), use_rgb=use_rgb,
-                out_path='{}/{}_{}_{}_true'.format(args.save_dirs, args.dataname+c_surfix, method, idx))
-
-        show_video_line(preds, ncols=ncols, vmax=0.6, cbar=False,
-                        out_path='{}/{}_{}_{}'.format(args.save_dirs, args.dataname+c_surfix, method, str(idx)+'.png'),
-                        format='png', use_rgb=use_rgb)
-        show_video_gif_multiple(inputs, trues, preds, use_rgb=use_rgb,
-                                out_path='{}/{}_{}_{}'.format(args.save_dirs, args.dataname+c_surfix, method, idx))
-        show_video_gif_single(preds, use_rgb=use_rgb,
-                              out_path='{}/{}_{}_{}_pred'.format(args.save_dirs, args.dataname+c_surfix, method, idx))
+    suffix = f"parflow_C{args.vis_channel}_{args.index}"
+    show_video_gif_single(inputs.copy(), out_path=os.path.join(args.save_dir, f'{suffix}_input'))
+    show_video_gif_single(trues.copy(), out_path=os.path.join(args.save_dir, f'{suffix}_true'))
+    show_video_gif_multiple(inputs, trues, preds,
+                            out_path=os.path.join(args.save_dir, f'{suffix}_compare'))
+    show_video_gif_single(preds, out_path=os.path.join(args.save_dir, f'{suffix}_pred'))
 
 
 if __name__ == '__main__':

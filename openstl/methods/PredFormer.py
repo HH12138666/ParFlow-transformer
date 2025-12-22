@@ -18,6 +18,21 @@ class PredFormer(Base_method):
         
     def _build_model(self, args):
         return PredFormer_Model(**args).to(self.device)
+    
+    def _merge_pred_with_aux(self, pred, prev_seq):
+        """Pad predicted channels with auxiliary input channels for autoregressive rollout."""
+        if not hasattr(self.model, "in_channels") or not hasattr(self.model, "out_channels"):
+            return pred
+        in_ch = self.model.in_channels
+        out_ch = self.model.out_channels
+        if in_ch == out_ch:
+            return pred
+        if prev_seq.shape[2] < in_ch:
+            raise ValueError(f"Input has {prev_seq.shape[2]} channels, expected {in_ch}")
+        if out_ch > in_ch:
+            raise ValueError(f"Output channels {out_ch} cannot exceed input channels {in_ch}")
+        aux = prev_seq[:, :, out_ch:in_ch, :, :]
+        return torch.cat([pred, aux], dim=2)
     def _predict(self, batch_x, batch_y=None, **kwargs):
         """Forward the model"""
         if self.args.aft_seq_length == self.args.pre_seq_length:
@@ -32,12 +47,13 @@ class PredFormer(Base_method):
             
             cur_seq = batch_x.clone()
             for _ in range(d):
-                cur_seq = self.model(cur_seq)
-                pred_y.append(cur_seq)
+                pred_block = self.model(cur_seq)
+                pred_y.append(pred_block)
+                cur_seq = self._merge_pred_with_aux(pred_block, cur_seq)
 
             if m != 0:
-                cur_seq = self.model(cur_seq)
-                pred_y.append(cur_seq[:, :m])
+                pred_block = self.model(cur_seq)
+                pred_y.append(pred_block[:, :m])
             
             pred_y = torch.cat(pred_y, dim=1)
         return pred_y

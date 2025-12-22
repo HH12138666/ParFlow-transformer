@@ -355,16 +355,18 @@ class BaseExperiment(object):
             if has_nni and 'mse' in results:
                 nni.report_intermediate_result(results['mse'].mean())
             if gather_data:
-                folder_path = osp.join(self.path, 'val_saved')
-                check_dir(folder_path)
-                epoch_tag = f'epoch_{self._epoch + 1:03d}'
-                save_stride = max(1, getattr(self.args, 'val_save_stride', 1))
-                save_indices = slice(None, None, save_stride)
-                for np_data in ['inputs', 'trues', 'preds', 'metrics']:
-                    data_to_save = results[np_data]
-                    if np_data in {'inputs', 'trues', 'preds'} and save_stride > 1:
-                        data_to_save = data_to_save[save_indices]
-                    np.save(osp.join(folder_path, f'{np_data}_{epoch_tag}.npy'), data_to_save)                      
+                save_stride = getattr(self.args, 'val_save_stride', None)
+                if save_stride is not None and int(save_stride) > 0:
+                    folder_path = osp.join(self.path, 'val_saved')
+                    check_dir(folder_path)
+                    epoch_tag = f'epoch_{self._epoch + 1:03d}'
+                    save_stride = max(1, int(save_stride))
+                    save_indices = slice(None, None, save_stride)
+                    for np_data in ['inputs', 'trues', 'preds', 'metrics']:
+                        data_to_save = results[np_data]
+                        if np_data in {'inputs', 'trues', 'preds'} and save_stride > 1:
+                            data_to_save = data_to_save[save_indices]
+                        np.save(osp.join(folder_path, f'{np_data}_{epoch_tag}.npy'), data_to_save)                      
 
         return results['loss'].mean()
 

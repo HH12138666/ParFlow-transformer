@@ -71,13 +71,14 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
         # 自动调整 mean 和 std 的 shape，以匹配 pred 的通道维度
         if pred.ndim >= 3:
             
-            C_pred = pred.shape[2]  
-            C_mean = mean.shape[0]  
+            C_pred = pred.shape[2]
+            C_mean = mean.shape[0]
 
-            if C_pred == C_mean:
-                
-                mean = mean.reshape(1, 1, -1, 1, 1)  
-                std  = std.reshape(1, 1, -1, 1, 1)   
+            if C_pred <= C_mean:
+                mean = mean[:C_pred]
+                std = std[:C_pred]
+                mean = mean.reshape(1, 1, -1, 1, 1)
+                std = std.reshape(1, 1, -1, 1, 1)
             else:
                 raise ValueError(f"Channel count mismatch: pred has {C_pred} channels, mean/std has {C_mean} channels.")
 

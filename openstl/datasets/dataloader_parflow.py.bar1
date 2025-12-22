@@ -144,6 +144,7 @@ def _read_evap_frame(evap_path):
         raise FileNotFoundError(f"Evaptrans file not found: {evap_path}")
 
     arr = read_pfb(get_absolute_path(str(evap_path))).astype(np.float32)
+    arr = _interpolate_outliers(arr, abs_threshold=ABS_OUTLIER_THRESHOLD)
 
     if arr.ndim != 3:
         raise ValueError(f'Expected 3D evaptrans array, got shape {arr.shape} for {evap_path}')
@@ -158,6 +159,7 @@ def _read_static_stack(static_root):
     arrays = []
     for f in files:
         arr = read_pfb(get_absolute_path(str(f))).astype(np.float32)
+        arr = _interpolate_outliers(arr, abs_threshold=ABS_OUTLIER_THRESHOLD)
         if arr.ndim == 2:
             arr = arr[None, ...]
         elif arr.ndim != 3:
@@ -577,7 +579,7 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
 
 if __name__ == '__main__':
     # 单独计算并保存 mean/std（按类型分别统计后拼接）
-    data_root = '/home/huanghui/data/ParFlow-transformer/data/parflow'
+    data_root = '/home/huanghui/data/ParFlow-transformer/data/parlow'
     press_root, evap_root, static_root = _resolve_parflow_roots(data_root)
 
     press_files = _list_pfb_files(press_root)
