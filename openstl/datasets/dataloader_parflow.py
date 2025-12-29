@@ -28,6 +28,8 @@ STATS_COMPUTE_SAMPLES = 0          # 计算均值和方差时使用的样本数�
 STATS_TIME_STRIDE = 1
 STATS_SPATIAL_STRIDE = 1
 MAX_FILES = None                    # 设为 None 表示使用全部文件；也可以设为 100 只用前100个
+# 是否拼接 static 数据
+USE_STATIC = False
 CHANNELS = None    
 
 # evaptrans 固定使用 6-9 层，路径固定为 data_root/evapotrans
@@ -67,7 +69,7 @@ def _resolve_parflow_roots(data_root):
     base = Path(data_root)
     press_root = str(base / "press")
     evap_root = str(base / "evapotrans")
-    static_root = str(base / "static")
+    static_root = str(base / "static") if USE_STATIC else None
     return press_root, evap_root, static_root
 
 # 异常值修复

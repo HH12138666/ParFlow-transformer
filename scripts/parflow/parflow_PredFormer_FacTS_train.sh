@@ -15,8 +15,8 @@ python tools/train.py \
     --dataname parflow \
     --data_root /home/huanghui/data/ParFlow-transformer/data/parflow \
     --res_dir work_dirs \
-    --batch_size  28\
-    --val_batch_size 28 \
+    --batch_size  12\
+    --val_batch_size 12 \
     --epoch 150 \
     --overwrite \
     --lr 5e-4 \
@@ -27,4 +27,4 @@ python tools/train.py \
     --ex_name "$EX_NAME" \
     --tb_dir logs_tb/12-11 \
     --early_stop_epoch 25 \
-    --num_workers 28 \
+    --num_workers 12 \

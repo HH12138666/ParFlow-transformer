@@ -9,3 +9,7 @@ check_data_figure/
 result_analyze/
 slurm-*
 debug_outliers/
+inference_data/
+inference_plot/
+stats.npz.baryes
+
