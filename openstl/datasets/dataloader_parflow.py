@@ -8,8 +8,6 @@ from typing import Optional
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-import matplotlib.pyplot as plt
-
 from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb
 
@@ -17,34 +15,25 @@ from openstl.datasets.utils import create_loader
 
 logger = logging.getLogger(__name__)
 
-
+#数值稳定常量
 EPS = 1e-6
 
 #计算均值和方差相关设置
 NORMALIZE = True
 NORMALIZE_TARGET = True
-STATS_PATH = './stats.npz'                  # 存放均值和方差的路径，如设 None 则不加载 './stats.npz'
-STATS_COMPUTE_SAMPLES = 0          # 计算均值和方差时使用的样本数量，如设 0 则不计算
-STATS_TIME_STRIDE = 1
-STATS_SPATIAL_STRIDE = 1
-MAX_FILES = None                    # 设为 None 表示使用全部文件；也可以设为 100 只用前100个
-# 是否拼接 static 数据
+STATS_PATH = './stats/stats_press_evapotrans.npz'   
+               
+#是否拼接 static 数据
 USE_STATIC = False
-CHANNELS = None    
-
 # evaptrans 固定使用 6-9 层，路径固定为 data_root/evapotrans
 EVAP_CHANNELS = [6, 7, 8, 9]
 
-
-# 如需只预测压力通道，可在 Dataset 初始化时设置 target_channels（例如 10）
-
+#异常值修复相关设置
 ABS_OUTLIER_THRESHOLD = -10000.0   # 绝对阈值：低于该值直接视为异常并修复
 OUTLIER_STD_MULT = 5              # 动态阈值：偏离均值超过 k * std 判为异常（上下双向）
 
 #数据分割相关设置
 time_stride = 5    # 时间步长，用于数据分割
-
-
 
 def _natural_key(p):
     b = os.path.basename(p)
@@ -138,7 +127,7 @@ def _read_press_frame(press_path) :
     return arr
 
 
-# 读取单个 evaptrans 文件并修复异常值
+# 读取单个蒸发传输场文件
 def _read_evap_frame(evap_path):
     if evap_path is None:
         raise ValueError("evap_path is required when reading evaptrans data")
@@ -184,155 +173,6 @@ def _read_combined_frame(press_path,evap_path = None,static_arr = None):
         combined = np.concatenate([combined, static_arr], axis=0)
     return combined
 
-#计算均值和方差
-def _welford_update(count, mean, M2, batch_mean, batch_M2, batch_n):
-    total_n = count + batch_n
-    delta = batch_mean - mean
-    mean += delta * (batch_n / np.maximum(total_n, 1))
-    M2 += batch_M2 + (delta * delta) * (count * batch_n / np.maximum(total_n, 1))
-    count[:] = total_n
-    return count, mean, M2
-
-def _select_files(files, time_stride, max_files):
-    sel = files[::max(1, int(time_stride))]
-    if max_files is not None:
-        sel = sel[:int(max_files)]
-    return sel
-
-
-def _compute_mean_std_from_files(files, read_fn, spatial_stride=1):
-    if not files:
-        raise ValueError("files is empty")
-    a0 = read_fn(files[0])
-    if spatial_stride > 1:
-        a0 = a0[:, ::spatial_stride, ::spatial_stride]
-    C = a0.shape[0]
-    count = np.zeros(C, dtype=np.float64)
-    mean = np.zeros(C, dtype=np.float64)
-    M2 = np.zeros(C, dtype=np.float64)
-    for f in files:
-        a = read_fn(f)
-        if spatial_stride > 1:
-            a = a[:, ::spatial_stride, ::spatial_stride]
-        x = a.reshape(C, -1).astype(np.float64, copy=False)
-        b_mean = x.mean(axis=1)
-        diff = x - b_mean[:, None]
-        b_M2 = (diff * diff).sum(axis=1)
-        b_n = x.shape[1]
-        _welford_update(count, mean, M2, b_mean, b_M2, b_n)
-    var = M2 / np.maximum(count, 1.0)
-    std = np.sqrt(var)
-    return mean.astype(np.float32), std.astype(np.float32)
-
-
-def _compute_mean_std_from_array(arr, spatial_stride=1):
-    if arr is None:
-        return None, None
-    if spatial_stride > 1:
-        arr = arr[:, ::spatial_stride, ::spatial_stride]
-    x = arr.reshape(arr.shape[0], -1).astype(np.float64, copy=False)
-    mean = x.mean(axis=1)
-    std = x.std(axis=1)
-    return mean.astype(np.float32), std.astype(np.float32)
-
-
-def _concat_stats(parts):
-    keep = [p for p in parts if p is not None and p.size > 0]
-    if not keep:
-        raise ValueError("No stats to concatenate")
-    if len(keep) == 1:
-        return keep[0]
-    return np.concatenate(keep, axis=0)
-
-
-def compute_mean_std(files,spatial_stride=1,time_stride=1,max_files=None,channels=None,evap_files=None,static_arr=None):
-    # 按类型分别统计，然后按拼接顺序组合
-    press_sel = _select_files(files, time_stride, max_files)
-    if not press_sel:
-        raise ValueError("press_files is empty")
-    evap_sel = None
-    if evap_files is not None:
-        evap_sel = _select_files(evap_files, time_stride, max_files)
-        if len(evap_sel) != len(press_sel):
-            raise ValueError("press/evap file counts do not match after stride")
-
-    press_mean, press_std = _compute_mean_std_from_files(
-        press_sel, _read_press_frame, spatial_stride
-    )
-    evap_mean, evap_std = (None, None)
-    if evap_sel is not None:
-        evap_mean, evap_std = _compute_mean_std_from_files(
-            evap_sel, _read_evap_frame, spatial_stride
-        )
-    static_mean, static_std = _compute_mean_std_from_array(
-        static_arr, spatial_stride
-    )
-
-    mean = _concat_stats([press_mean, evap_mean, static_mean])
-    std = _concat_stats([press_std, evap_std, static_std])
-
-    if channels is not None:
-        mean = mean[channels]
-        std = std[channels]
-    return mean, std
-
-
-def compute_press_evap_mean_std(press_files,evap_root,spatial_stride=1,time_stride=1,max_files=None):
-    """
-    分别计算 pressure 和 evaptrans 的均值/标准差（按通道）。
-    返回 (press_mean, press_std, evap_mean, evap_std) 四个 np.float32 向量。
-    """
-    sel_files = press_files[::max(1, int(time_stride))]
-    if max_files is not None:
-        sel_files = sel_files[:int(max_files)]
-    if not sel_files:
-        raise ValueError("press_files is empty")
-    evap_files = _list_pfb_files(evap_root)
-    evap_sel = evap_files[::max(1, int(time_stride))]
-    if max_files is not None:
-        evap_sel = evap_sel[:int(max_files)]
-    if len(evap_sel) != len(sel_files):
-        raise ValueError("press/evap file counts do not match after stride")
-
-    p0 = _read_press_frame(sel_files[0])
-    e0 = _read_evap_frame(evap_sel[0])
-
-    def _init_stats(C):
-        return (
-            np.zeros(C, dtype=np.float64),  # sum
-            np.zeros(C, dtype=np.float64),  # sumsq
-            np.zeros(C, dtype=np.float64),  # count
-        )
-
-    p_sum, p_sumsq, p_cnt = _init_stats(p0.shape[0])
-    e_sum, e_sumsq, e_cnt = _init_stats(e0.shape[0])
-
-    def _update(arr, sum_, sumsq_, cnt_):
-        if spatial_stride > 1:
-            arr = arr[:, ::spatial_stride, ::spatial_stride]
-        sum_ += arr.sum(axis=(1, 2))
-        sumsq_ += np.square(arr).sum(axis=(1, 2))
-        cnt_ += arr.shape[1] * arr.shape[2]
-        return sum_, sumsq_, cnt_
-
-    for i, f in enumerate(sel_files):
-        p = _read_press_frame(f)
-        e = _read_evap_frame(evap_sel[i])
-        if p.shape[1:] != e.shape[1:]:
-            raise ValueError(f"Spatial shape mismatch between press and evap: {p.shape} vs {e.shape} for {f}")
-        p_sum, p_sumsq, p_cnt = _update(p, p_sum, p_sumsq, p_cnt)
-        e_sum, e_sumsq, e_cnt = _update(e, e_sum, e_sumsq, e_cnt)
-
-    def _finish(sum_, sumsq_, cnt_):
-        mean = sum_ / np.maximum(cnt_, 1.0)
-        var = sumsq_ / np.maximum(cnt_, 1.0) - np.square(mean)
-        std = np.sqrt(np.maximum(var, 0.0))
-        return mean.astype(np.float32), std.astype(np.float32)
-
-    press_mean, press_std = _finish(p_sum, p_sumsq, p_cnt)
-    evap_mean, evap_std = _finish(e_sum, e_sumsq, e_cnt)
-    return press_mean, press_std, evap_mean, evap_std
-
 #增强数据
 def augment_pair(X, Y,p_flip_h=0.5,p_flip_w=0.5,p_noise=0.2,noise_sigma=0.001):
     
@@ -348,14 +188,14 @@ def augment_pair(X, Y,p_flip_h=0.5,p_flip_w=0.5,p_noise=0.2,noise_sigma=0.001):
 
 
 class ParFlowDataset(Dataset):
-    def __init__(self, press_root, split, pre_seq_length=9, aft_seq_length=1 ,in_shape = None,use_augment=False,
-                 space_h = None,
-                 space_w = None,
-                 space_stride_h = None,
-                 space_stride_w = None,
-                 evap_root = None,
-                 static_root = None,
-                 target_channels = None,):
+    def __init__(self, press_root, split, pre_seq_length=12, aft_seq_length=12 ,in_shape = None,use_augment=False,
+                space_h = None,
+                space_w = None,
+                space_stride_h = None,
+                space_stride_w = None,
+                evap_root = None,
+                static_root = None,
+                target_channels = None,):
         super().__init__()
         split = str(split).lower()
         if split not in ('train', 'val', 'test'):
@@ -370,14 +210,12 @@ class ParFlowDataset(Dataset):
         self.space_h = space_h
         self.space_w = space_w
         self.use_space = self.space_h is not None and self.space_w is not None
-        self.evapo_root = evap_root
+        self.evap_root = evap_root
         self.static_root = static_root
         self.static_arr = _read_static_stack(self.static_root) if self.static_root is not None else None
         self.target_channels = target_channels  # 仅用于标签 y，输入 x 仍保留全部通道
         
         if self.use_space:
-            # Always honor the configured stride so overlapping crops can be
-            # used consistently across train/val/test.
             self.space_stride_h = space_stride_h or self.space_h
             self.space_stride_w = space_stride_w or self.space_w
         else:
@@ -386,8 +224,8 @@ class ParFlowDataset(Dataset):
 
 
         self.files = _list_pfb_files(self.press_root)
-        if self.evapo_root is not None:
-            self.evap_files = _list_pfb_files(self.evapo_root)
+        if self.evap_root is not None:
+            self.evap_files = _list_pfb_files(self.evap_root)
             if len(self.evap_files) != len(self.files):
                 raise ValueError(
                     f"press/evap file counts do not match: {len(self.files)} vs {len(self.evap_files)}"
@@ -430,19 +268,11 @@ class ParFlowDataset(Dataset):
                 self.std  = np.asarray(data['std'],  dtype=np.float32).reshape(-1)
                 if self.mean.shape[0] != self.C or self.std.shape[0] != self.C:
                     raise ValueError(f"Stats mismatch: stats C={self.mean.shape[0]} vs dataset C={self.C}.")
-            elif STATS_COMPUTE_SAMPLES and STATS_COMPUTE_SAMPLES > 0:
-                self.mean, self.std = compute_mean_std(
-                    self.files,
-                    spatial_stride=STATS_SPATIAL_STRIDE,
-                    time_stride=STATS_TIME_STRIDE,
-                    max_files=STATS_COMPUTE_SAMPLES,
-                    channels=None,
-                    evap_files=self.evap_files,
-                    static_arr=self.static_arr,
-                )
             else:
-                self.mean = np.zeros((self.C,), dtype=np.float32)
-                self.std  = np.ones((self.C,), dtype=np.float32)
+                raise FileNotFoundError(
+                    f"Stats file not found at {STATS_PATH}. "
+                    "Please compute mean/std offline and save the npz first."
+                )
         self.mean_t = torch.from_numpy(self.mean).view(1, self.C, 1, 1).float() if self.mean is not None else None
         self.std_t  = torch.from_numpy(self.std ).view(1, self.C, 1, 1).float() if self.std  is not None else None
 
@@ -464,6 +294,8 @@ class ParFlowDataset(Dataset):
 
     def __len__(self):      
         return len(self.sample_indices)
+    
+    
     # 按时间窗口读取数据确保时间连续   
     def _read_window(self, t0):
         T = self.total
@@ -575,113 +407,3 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
     )
 
     return train_loader, vali_loader, test_loader
-
-
-if __name__ == '__main__':
-    # 单独计算并保存 mean/std（按类型分别统计后拼接）
-    data_root = '/home/huanghui/data/ParFlow-transformer/data/parflow'
-    press_root, evap_root, static_root = _resolve_parflow_roots(data_root)
-
-    press_files = _list_pfb_files(press_root)
-    evap_files = _list_pfb_files(evap_root)
-    static_arr = _read_static_stack(static_root)
-
-    mean, std = compute_mean_std(
-        files=press_files,
-        spatial_stride=STATS_SPATIAL_STRIDE,
-        time_stride=STATS_TIME_STRIDE,
-        max_files=MAX_FILES,
-        evap_files=evap_files,
-        static_arr=static_arr,
-    )
-    print("=== 每个通道的 Mean 和 Std ===")
-    for c in range(mean.shape[0]):
-        print(f"Channel {c}: Mean = {mean[c]:.6f}, Std = {std[c]:.6f}")
-    np.savez(STATS_PATH, mean=mean, std=std)
-    print(f"✅ 均值和方差已保存到：{STATS_PATH}")
-
-
-    '''
-    # 统计 Channel 的最大值、最小值、均值、标准差
-    for c in range(10):  # 假设有10个通道
-        all_channel_data = []
-        files = _list_pfb_files('data/')
-        for file in files:
-            data = _read_press_frame(file)
-            all_channel_data.append(data[c, :, :].flatten())
-            
-        all_channel_data = np.array(all_channel_data)
-        max_per_sample = [arr.max() for arr in all_channel_data]
-        min_per_sample = [arr.min() for arr in all_channel_data]
-        print(f"Channel {c} 的最大值为：", max(max_per_sample))
-        print(f"Channel {c} 的最小值为：", min(min_per_sample))
-        print(f"Channel {c} 异常样本数（比如最大值 > 1000）：", sum(v > 1000 for v in max_per_sample))
-        print(f"Channel {c} 异常样本数（比如最小值 < -1000）：", sum(v < -1000 for v in min_per_sample))
-        mean_c = np.mean(np.concatenate(all_channel_data))
-        std_c = np.std(np.concatenate(all_channel_data))
-        print(f"Channel {c} 的均值为：", mean_c)    
-        print(f"Channel {c} 的标准差为：", std_c)
-    '''
-
-
-    '''
-    files = _list_pfb_files('data/')
-    print(f"🔍 总共读取了 {len(files)} 个 .pfb 文件")
-    '''
-    
-    '''
-    # 检查数据加载器和mean和std计算是否正确
-    dataloader_train, dataloader_vali, dataloader_test = \
-        load_data(batch_size=16,
-                val_batch_size=16,
-                data_root='/home/huanghui/data/ParFlow-transformer/data/parlow',
-                num_workers=20,
-                pre_seq_length=10,
-                aft_seq_length=10,
-                space_h=64,
-                space_w=64,
-                space_stride_h=32,
-                space_stride_w=32,
-                target_channels=10
-                )
-    # print(dataloader_train.dataset.mean,dataloader_test.dataset.std)
-    
-
-    print(len(dataloader_train),len(dataloader_vali),len(dataloader_test))
-    for item in dataloader_train:
-        print(item[0].shape, item[1].shape)
-        break
-    for item in dataloader_test:
-        print(item[0].shape, item[1].shape)
-        break
-
-
-    x, y = next(iter(dataloader_train))
-    print(x.shape, y.shape)
-    '''
-    
-    '''
-    # 简单检查异常值清洗效果：读取一段样本并打印修改数量与每个通道的 min/mean/max
-    sample_path = dataloader_train.dataset.files[0]
-    raw = read_pfb(get_absolute_path(sample_path)).astype(np.float32)
-    cleaned = _interpolate_outliers(raw, abs_threshold=ABS_OUTLIER_THRESHOLD)
-    print(f"\n=== 清洗后样本: {sample_path} ===")
-    for c in range(min(10, cleaned.shape[0])):  # 防止通道太多
-        chan = cleaned[c]
-        print(f"Channel {c}: min={chan.min():.4f}, mean={chan.mean():.4f}, std={chan.std():.4f}, max={chan.max():.4f}")
-
-    # 保存各通道的可视化图片（绝对+动态阈值清洗）
-    out_dir = Path(f"debug_outliers/abs_std{OUTLIER_STD_MULT}")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for c in range(cleaned.shape[0]):
-        chan = cleaned[c]
-        fig, ax = plt.subplots(figsize=(9, 7))
-        im = ax.imshow(chan, cmap="viridis")
-        ax.set_title(f"Channel {c}", fontsize=13)
-        ax.axis("off")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        out_path = out_dir / f"sample_ch{c}.png"
-        fig.savefig(out_path, dpi=220, bbox_inches="tight")
-        plt.close(fig)
-    print(f"通道可视化已保存到: {out_dir.resolve()}")
-    '''

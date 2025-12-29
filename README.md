@@ -9,7 +9,7 @@ Replacing traditional ​ParFlow hydrological model​ with ​PredFormer, a lar
 conda env create -f environment.yml  
 conda activate predformer
 pip install -e .
-pip install tensorboard einops
+pip install einops
 ```
 
 

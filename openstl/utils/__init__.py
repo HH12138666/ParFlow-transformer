@@ -7,8 +7,6 @@ from .main_utils import (set_seed, setup_multi_processes, print_log, output_name
                          init_dist, init_random_seed, get_dist_info, reduce_tensor)
 from .parser import create_parser, default_parser
 from .progressbar import ProgressBar, Timer
-from .visualization import (show_video_line, show_video_gif_multiple, show_video_gif_single,
-                            show_heatmap_on_image)
 
 
 __all__ = [
@@ -22,5 +20,4 @@ __all__ = [
     'LapLoss', 'MeanShift', 'VGGPerceptualLoss','shaploss',
     'get_initial_states',
     'ProgressBar', 'Timer',
-    'show_video_line',  'show_video_gif_multiple', 'show_video_gif_single', 'show_heatmap_on_image',
 ]

@@ -16,7 +16,6 @@ def create_parser():
                         help='Interval in batches between display of training metrics')
     parser.add_argument('--res_dir', default='work_dirs', type=str)
     parser.add_argument('--ex_name', '-ex', default='Debug', type=str)
-    parser.add_argument('--tb_dir', '-tb', default='logs_tb', type=str)
     parser.add_argument('--use_gpu', default=True, type=bool)
     parser.add_argument('--fp16', action='store_true', default=False,
                         help='Whether to use Native AMP for mixed precision training (PyTorch=>1.6.0)')
@@ -64,6 +63,7 @@ def create_parser():
                         help='Whether to use prefetcher for faster data loading')
     parser.add_argument('--drop_last', action='store_true', default=False,
                         help='Whether to drop the last batch in the val data loading')
+    
     # ParFlow tiling parameters
     parser.add_argument('--space_h', default=None, type=int, help='Spatial crop height for ParFlow tiling')
     parser.add_argument('--space_w', default=None, type=int, help='Spatial crop width for ParFlow tiling')
@@ -74,26 +74,27 @@ def create_parser():
 
     # method parameters
     parser.add_argument('--method', '-m', default='predformer', type=str,
-                        choices=['ConvLSTM', 'convlstm', 'CrevNet', 'crevnet', 'DMVFN', 'dmvfn', 'E3DLSTM', 'e3dlstm',
-                                 'MAU', 'mau', 'MIM', 'mim', 'PhyDNet', 'phydnet', 'PredNet', 'prednet','predformer',
-                                 'PredRNN', 'predrnn', 'PredRNNpp', 'predrnnpp', 'PredRNNv2', 'predrnnv2',
-                                 'SimVP', 'simvp', 'TAU', 'tau','STGame','stgame','STPara','stpara','stmamba','STMamba',
-                                 'syncformer','SyncFormer', 'syncformer_ablation', 'SyncFormer_Ablation','quadformer','QuadFormer','mam','MAM'],
-                        help='Name of video prediction method to train (default: "predformer")')
+                        choices=['predformer'],
+                        help='Name of video prediction method to train')
     parser.add_argument('--config_file', '-c', default='configs/parflow/PredFormer.py', type=str,
                         help='Path to the default config file')
-    parser.add_argument('--model_type', default=None, type=str,
-                        help='Name of model for predformer (default: None)')
+    
+    #parser.add_argument('--model_type', default=None, type=str,
+    #                    help='Name of model for predformer (default: None)')
+    
     parser.add_argument('--drop', type=float, default=0.0, help='Dropout rate(default: 0.)')
+    
     # parser.add_argument('--drop_path', type=float, default=0.0, help='Drop path rate for SimVP (default: 0.)')
     parser.add_argument('--overwrite', action='store_true', default=False,
                         help='Whether to allow overwriting the provided config file with args')
+    '''
     # STGame parameters
     parser.add_argument('--alpha', type=float, default=0.1, 
                         help='coefficient of shaploss')
     parser.add_argument('--top_k', type=int, default=100, 
                         help='top_k indices for game theory')
-
+    '''
+    
     # Training parameters (optimizer)
     parser.add_argument('--epoch', '-e', default=None, type=int, help='end epochs (default: 200)')
     parser.add_argument('--log_step', default=1, type=int, help='Log interval by step')
@@ -159,7 +160,6 @@ def default_parser():
         'display_step': 10,
         'res_dir': 'work_dirs',
         'ex_name': 'Debug',
-        'tb_dir': 'logs_tb',
         'use_gpu': True,
         'fp16': False,
         'torchscript': False,
@@ -177,11 +177,12 @@ def default_parser():
         'launcher': 'pytorch',
         'local_rank': 0,
         'port': 29500,
+        
         # dataset parameters
         'batch_size': 16,
         'val_batch_size': 16,
         'num_workers': 4,
-        'data_root': './data',
+        'data_root': './data/parflow',
         'dataname': 'parflow',
         'pre_seq_length': 10,
         'aft_seq_length': 10,
@@ -189,19 +190,22 @@ def default_parser():
         'use_augment': False,
         'use_prefetcher': False,
         'drop_last': False,
+        
         # ParFlow tiling parameters
         'space_h': None,  
         'space_w': None,
         'space_stride_h': None,
         'space_stride_w': None,
-        'val_save_stride': None,       
+        'val_save_stride': None,  
+             
         # method parameters
-        'method': 'SimVP',
+        'method': 'predformer',
         'config_file': 'configs/parflow/PredFormer.py',
-        'model_type': 'gSTA',
+        #'model_type': 'gSTA',
         'drop': 0,
         'drop_path': 0,
         'overwrite': False,
+        
         # Training parameters (optimizer)
         'epoch': 200,
         'log_step': 1,

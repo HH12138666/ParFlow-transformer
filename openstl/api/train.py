@@ -9,7 +9,6 @@ from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 import torch
 import torch.distributed as dist
-from torch.utils.tensorboard import SummaryWriter
 from openstl.core import Hook, metric, Recorder, get_priority, hook_maps
 from openstl.methods import method_maps
 from openstl.utils import (set_seed, print_log, output_namespace, check_dir, collect_env,
@@ -43,17 +42,6 @@ class BaseExperiment(object):
         self._world_size = 1
         self._dist = self.args.dist
         self._early_stop = self.args.early_stop_epoch
-
-        # Initialize TensorBoard SummaryWriter
-        if self._rank == 0:     
-            self.tb_path = self.args.tb_dir
-            # self.tb_path = osp.join(self.args.tb_dir, self.args.ex_name if not self.args.ex_name.startswith(self.args.res_dir) \
-            # else self.args.ex_name.split(self.args.res_dir+'/')[-1])
-            check_dir(self.tb_path)
-            self.writer = SummaryWriter(log_dir=self.tb_path)
-        else:
-            self.writer = None
-            
         self._preparation(dataloaders)
         if self._rank == 0:
             print_log(output_namespace(self.args))
@@ -312,10 +300,6 @@ class BaseExperiment(object):
                         epoch + 1, len(self.train_loader), cur_lr, loss_mean.avg, vali_loss))
                     early_stop = recorder(vali_loss, self.method.model, self.path)
                     self._save(name='latest')
-                    if self.writer:
-                        self.writer.add_scalar(f'{self.args.ex_name}/train', loss_mean.avg, epoch)
-                        self.writer.add_scalar(f'{self.args.ex_name}/val', vali_loss, epoch)
-                        self.writer.add_scalar(f'{self.args.ex_name}/learning_rate', cur_lr, epoch)
 
                     
             if self._use_gpu and self.args.empty_cache:
@@ -324,9 +308,6 @@ class BaseExperiment(object):
                 #print_log('Early stop training at f{} epoch'.format(epoch))
                 print_log('Early stop training at {} epoch'.format(epoch + 1))
                 break
-        
-        if self.writer:
-            self.writer.close()
             
         if not check_dir(self.path):  # exit training when work_dir is removed
             assert False and "Exit training because work_dir is removed"

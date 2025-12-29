@@ -12,10 +12,8 @@ python tools/compute_press_evap_stats.py \
 import argparse
 import numpy as np
 
-from openstl.datasets.dataloader_parflow import (
-    _list_pfb_files,
-    compute_press_evap_mean_std,
-)
+from openstl.datasets.dataloader_parflow import _list_pfb_files
+from openstl.datasets.compute_mean_std import compute_press_evap_mean_std
 
 
 def main():

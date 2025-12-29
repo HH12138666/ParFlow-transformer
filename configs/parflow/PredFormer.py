@@ -15,8 +15,8 @@ model_config = {
     'val_save_stride': 0,
     
     # video length in and out
-    'pre_seq': 10,
-    'after_seq': 70,
+    'pre_seq': 12,
+    'after_seq': 12,
     # patch size
     'patch_size': 4,
     'dim': 256, 

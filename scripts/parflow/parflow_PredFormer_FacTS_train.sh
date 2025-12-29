@@ -8,15 +8,15 @@ export PYTHONPATH="$REPO:$PYTHONPATH"
 # 选择使用的GPU
 export CUDA_VISIBLE_DEVICES=2
 CURRENT_TIME=$(date +"%Y-%m-%d-%H-%M")
-EX_NAME="ParFlow_press/${CURRENT_TIME}_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep"
+EX_NAME="ParFlow_press/${CURRENT_TIME}_FACTS"
 
 python tools/train.py \
     --config_file configs/parflow/PredFormer.py \
     --dataname parflow \
     --data_root /home/huanghui/data/ParFlow-transformer/data/parflow \
     --res_dir work_dirs \
-    --batch_size  12\
-    --val_batch_size 12 \
+    --batch_size  28\
+    --val_batch_size 28 \
     --epoch 150 \
     --overwrite \
     --lr 5e-4 \
@@ -25,6 +25,5 @@ python tools/train.py \
     --opt adamw \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
-    --tb_dir logs_tb/12-11 \
     --early_stop_epoch 25 \
-    --num_workers 12 \
+    --num_workers 28 \

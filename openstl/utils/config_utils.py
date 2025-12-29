@@ -6,10 +6,7 @@ import sys
 import ast
 from importlib import import_module
 
-'''
-Thanks the code from https://github.com/open-mmlab/mmcv/blob/master/mmcv/utils/config.py wrote by Open-MMLab.
-The `Config` class here uses some parts of this reference.
-'''
+
 
 def check_file_exist(filename, msg_tmpl='file "{}" does not exist'):
     if not osp.isfile(filename):

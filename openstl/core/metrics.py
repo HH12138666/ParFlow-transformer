@@ -1,13 +1,4 @@
-import cv2
 import numpy as np
-import torch
-
-try:
-    import lpips
-    from skimage.metrics import structural_similarity as cal_ssim
-except:
-    lpips = None
-    cal_ssim = None
 
 
 def rescale(x):
@@ -48,7 +39,7 @@ def MAPE(pred, true, spatial_norm=False, eps=1e-8):
 
 def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
            clip_range=[0, 1], channel_names=None,
-           spatial_norm=False, return_log=True):
+           spatial_norm=True, return_log=True):
     """评估函数，用于输出各种评估指标。
 
     参数:
@@ -66,7 +57,6 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
         dict: 包含各项评估指标结果的字典。
     """
     
-    #修改
     if mean is not None and std is not None:
         # 自动调整 mean 和 std 的 shape，以匹配 pred 的通道维度
         if pred.ndim >= 3:
@@ -82,7 +72,7 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
             else:
                 raise ValueError(f"Channel count mismatch: pred has {C_pred} channels, mean/std has {C_mean} channels.")
 
-        # 现在可以安全地做反标准化
+        
         pred = pred * std + mean
         true = true * std + mean
     '''
@@ -135,7 +125,7 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
                                                        true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
                 rmse_sum += eval_res[f'rmse_{str(c_name)}']
             eval_res['rmse'] = rmse_sum / c_group
-    #修改
+                
     if 'mape' in metrics:
         if channel_names is None:
             eval_res['mape'] = MAPE(pred, true, spatial_norm)
