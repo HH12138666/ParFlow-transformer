@@ -50,7 +50,7 @@ def create_parser():
     parser.add_argument('--batch_size', '-b', default=10, type=int, help='Training batch size')
     parser.add_argument('--val_batch_size', '-vb', default=10, type=int, help='Validation batch size')
     parser.add_argument('--num_workers', default=4, type=int)
-    parser.add_argument('--data_root', default='./data')
+    parser.add_argument('--data_root', default='./data/parflow', type=str,)
     parser.add_argument('--dataname', '-d', default='parflow', type=str,
                         help='Dataset name (default: "parflow")')
     parser.add_argument('--patch_size', default=None, type=int, help='Patch size for training')
@@ -63,6 +63,8 @@ def create_parser():
                         help='Whether to use prefetcher for faster data loading')
     parser.add_argument('--drop_last', action='store_true', default=False,
                         help='Whether to drop the last batch in the val data loading')
+    parser.add_argument('--static_data', type=str, default=None,
+                        help='Comma-separated keywords to select static .pfb files (case-insensitive)')
     
     # ParFlow tiling parameters
     parser.add_argument('--space_h', default=None, type=int, help='Spatial crop height for ParFlow tiling')
@@ -87,13 +89,6 @@ def create_parser():
     # parser.add_argument('--drop_path', type=float, default=0.0, help='Drop path rate for SimVP (default: 0.)')
     parser.add_argument('--overwrite', action='store_true', default=False,
                         help='Whether to allow overwriting the provided config file with args')
-    '''
-    # STGame parameters
-    parser.add_argument('--alpha', type=float, default=0.1, 
-                        help='coefficient of shaploss')
-    parser.add_argument('--top_k', type=int, default=100, 
-                        help='top_k indices for game theory')
-    '''
     
     # Training parameters (optimizer)
     parser.add_argument('--epoch', '-e', default=None, type=int, help='end epochs (default: 200)')
@@ -190,6 +185,7 @@ def default_parser():
         'use_augment': False,
         'use_prefetcher': False,
         'drop_last': False,
+        'static_data': None,
         
         # ParFlow tiling parameters
         'space_h': None,  

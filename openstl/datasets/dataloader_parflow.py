@@ -21,10 +21,11 @@ EPS = 1e-6
 #计算均值和方差相关设置
 NORMALIZE = True
 NORMALIZE_TARGET = True
-STATS_PATH = './stats/stats_press_evapotrans.npz'   
-               
+STATS_PATH = './stats'   
+STATS_NAME = 'stats_press_evapotrans_perm_x_alpha_n_porosity.npz'    
+STATS_PATH = os.path.join(STATS_PATH, STATS_NAME)         
 #是否拼接 static 数据
-USE_STATIC = False
+USE_STATIC = True
 # evaptrans 固定使用 6-9 层，路径固定为 data_root/evapotrans
 EVAP_CHANNELS = [6, 7, 8, 9]
 
@@ -48,7 +49,7 @@ def _list_pfb_files(root) :
     return files
 
 
-def _resolve_parflow_roots(data_root):
+def _resolve_parflow_roots(data_root, use_static=USE_STATIC):
     """
     Allow passing a base directory that contains subfolders:
     - press
@@ -58,8 +59,32 @@ def _resolve_parflow_roots(data_root):
     base = Path(data_root)
     press_root = str(base / "press")
     evap_root = str(base / "evapotrans")
-    static_root = str(base / "static") if USE_STATIC else None
+    static_root = str(base / "static") if use_static else None
     return press_root, evap_root, static_root
+
+
+def _parse_static_data(static_data):
+    if static_data is None:
+        return None
+    if isinstance(static_data, (list, tuple)):
+        patterns = [str(x).strip() for x in static_data if str(x).strip()]
+    else:
+        patterns = [p.strip() for p in str(static_data).split(',') if p.strip()]
+    return patterns or None
+
+
+def _filter_static_files(files, static_data):
+    patterns = _parse_static_data(static_data)
+    if not patterns:
+        return files
+    matched = []
+    for f in files:
+        name = os.path.basename(f)
+        if any(re.search(pat, name, re.IGNORECASE) for pat in patterns):
+            matched.append(f)
+    if not matched:
+        raise FileNotFoundError(f'No static .pfb files matched patterns: {patterns}')
+    return matched
 
 # 异常值修复
 def _interpolate_outliers(arr, abs_threshold=ABS_OUTLIER_THRESHOLD, std_mult=OUTLIER_STD_MULT):
@@ -142,10 +167,11 @@ def _read_evap_frame(evap_path):
     return arr[EVAP_CHANNELS, ...]
 
 # 读取静态数据堆栈
-def _read_static_stack(static_root):
+def _read_static_stack(static_root, static_data=None):
     if static_root is None:
         return None
     files = _list_pfb_files(static_root)
+    files = _filter_static_files(files, static_data)
     arrays = []
     for f in files:
         arr = read_pfb(get_absolute_path(str(f))).astype(np.float32)
@@ -195,7 +221,8 @@ class ParFlowDataset(Dataset):
                 space_stride_w = None,
                 evap_root = None,
                 static_root = None,
-                target_channels = None,):
+                target_channels = None,
+                static_data = None,):
         super().__init__()
         split = str(split).lower()
         if split not in ('train', 'val', 'test'):
@@ -212,7 +239,8 @@ class ParFlowDataset(Dataset):
         self.use_space = self.space_h is not None and self.space_w is not None
         self.evap_root = evap_root
         self.static_root = static_root
-        self.static_arr = _read_static_stack(self.static_root) if self.static_root is not None else None
+        self.static_data = static_data
+        self.static_arr = _read_static_stack(self.static_root, self.static_data) if self.static_root is not None else None
         self.target_channels = target_channels  # 仅用于标签 y，输入 x 仍保留全部通道
         
         if self.use_space:
@@ -348,24 +376,26 @@ class ParFlowDataset(Dataset):
 def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6,aft_seq_length = 6,
               in_shape = None,distributed = False,use_augment = False,use_prefetcher = False,drop_last = False,
               space_h = None,space_w = None,space_stride_h= None,space_stride_w= None,target_channels = None,
+              static_data = None,
               ):
 
-    press_root, evap_root, static_root = _resolve_parflow_roots(data_root)
+    use_static = USE_STATIC or static_data is not None
+    press_root, evap_root, static_root = _resolve_parflow_roots(data_root, use_static=use_static)
 
     train_ds = ParFlowDataset(press_root,'train',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=use_augment,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,target_channels=target_channels,)
+        evap_root=evap_root,static_root=static_root,target_channels=target_channels,static_data=static_data,)
     
     val_ds = ParFlowDataset(press_root, 'val',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=False,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,target_channels=target_channels,)
+        evap_root=evap_root,static_root=static_root,target_channels=target_channels,static_data=static_data,)
     
     test_ds = ParFlowDataset(press_root,'test',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=False,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,target_channels=target_channels,)
+        evap_root=evap_root,static_root=static_root,target_channels=target_channels,static_data=static_data,)
 
     input_channels = train_ds.C
 
@@ -407,3 +437,52 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
     )
 
     return train_loader, vali_loader, test_loader
+
+if __name__ == "__main__":
+    # 简单测试数据集和数据加载器
+    data_root = '/home/huanghui/data/ParFlow-transformer/data/parflow'
+    batch_size = 28
+    val_batch_size = 28
+    num_workers = 4
+    pre_seq_length = 12
+    aft_seq_length = 12
+    in_shape = [24, 36, 146, 252]  # 10 个压力层 + 4 个 evaptrans 层 + static 数据
+    space_h = 60
+    space_w = 84
+    space_stride_h = 30
+    space_stride_w = 42
+    target_channels = 10  # 仅预测压力通道
+
+    train_loader, vali_loader, test_loader = load_data(
+        batch_size,
+        val_batch_size,
+        data_root,
+        num_workers,
+        pre_seq_length,
+        aft_seq_length,
+        in_shape,
+        distributed=False,
+        use_augment=True,
+        use_prefetcher=False,
+        drop_last=False,
+        space_h=space_h,
+        space_w=space_w,
+        space_stride_h=space_stride_h,
+        space_stride_w=space_stride_w,
+        target_channels=target_channels,
+        static_data='perm_x,alpha,n_z6-9,porosity',
+    )
+
+    for x, y in train_loader:
+        print("Train batch - x shape:", x.shape, "y shape:", y.shape)
+        break
+
+    for x, y in vali_loader:
+        print("Val batch - x shape:", x.shape, "y shape:", y.shape)
+        break
+
+    for x, y in test_loader:
+        print("Test batch - x shape:", x.shape, "y shape:", y.shape)
+        break
+#export PYTHONPATH=/home/huanghui/data/ParFlow-transformer:$PYTHONPATH
+#python /home/huanghui/data/ParFlow-transformer/openstl/datasets/dataloader_parflow.py

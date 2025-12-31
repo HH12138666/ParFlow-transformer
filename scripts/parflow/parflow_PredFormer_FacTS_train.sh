@@ -6,7 +6,7 @@ cd "$REPO"
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
 # 选择使用的GPU
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
 CURRENT_TIME=$(date +"%Y-%m-%d-%H-%M")
 EX_NAME="ParFlow_press/${CURRENT_TIME}_FACTS"
 
@@ -25,5 +25,6 @@ python tools/train.py \
     --opt adamw \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
-    --early_stop_epoch 25 \
+    --early_stop_epoch 80 \
     --num_workers 28 \
+    --static_data perm_x,alpha,n_z6-9,porosity \

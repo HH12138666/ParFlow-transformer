@@ -102,6 +102,27 @@ class PredFormer_Model(nn.Module):
         self.num_frames_in = model_config['pre_seq']
         self.dim = model_config['dim']
         self.in_channels = model_config.get('in_channels', model_config.get('num_channels'))
+        self.input_channels = model_config.get('input_channels', self.in_channels)
+        self.dynamic_channels = model_config.get('dynamic_channels', None)
+        self.static_in_channels = model_config.get('static_in_channels', None)
+        self.static_out_channels = model_config.get('static_out_channels', None)
+        self.static_proj = None
+        if self.static_in_channels is not None and self.static_out_channels is not None:
+            if self.dynamic_channels is None:
+                self.dynamic_channels = self.input_channels - self.static_in_channels
+            expected_in = self.dynamic_channels + self.static_in_channels
+            if self.input_channels != expected_in:
+                raise ValueError(
+                    f"input_channels={self.input_channels} does not match "
+                    f"dynamic_channels+static_in_channels={expected_in}."
+                )
+            projected_in = self.dynamic_channels + self.static_out_channels
+            if self.in_channels != projected_in:
+                raise ValueError(
+                    f"in_channels={self.in_channels} does not match "
+                    f"dynamic_channels+static_out_channels={projected_in}."
+                )
+            self.static_proj = nn.Conv2d(self.static_in_channels, self.static_out_channels, kernel_size=1)
         self.out_channels = model_config.get('out_channels', self.in_channels)
         self.num_classes = self.out_channels
         self.heads = model_config['heads']
@@ -136,8 +157,17 @@ class PredFormer_Model(nn.Module):
 
     def forward(self, x):
         B, T, C, H, W = x.shape
-        if C != self.in_channels:
-            raise ValueError(f"Expected input channels={self.in_channels}, got {C}")
+        if C != self.input_channels:
+            raise ValueError(f"Expected input channels={self.input_channels}, got {C}")
+        if self.static_proj is not None:
+            dyn = x[:, :, :self.dynamic_channels]
+            static = x[:, :, self.dynamic_channels:self.dynamic_channels + self.static_in_channels]
+            static = static.reshape(B * T, self.static_in_channels, H, W)
+            static = self.static_proj(static)
+            static = static.reshape(B, T, self.static_out_channels, H, W)
+            x = torch.cat([dyn, static], dim=2)
+        if x.shape[2] != self.in_channels:
+            raise ValueError(f"Expected projected channels={self.in_channels}, got {x.shape[2]}")
         
         # Patch Embedding
         x = self.to_patch_embedding(x)

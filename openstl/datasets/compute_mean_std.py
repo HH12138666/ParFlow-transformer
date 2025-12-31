@@ -1,8 +1,14 @@
+import os
+import sys
 import numpy as np
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb
-
+import os
 from openstl.datasets.dataloader_parflow import (
     _interpolate_outliers,
     _list_pfb_files,
@@ -12,7 +18,10 @@ from openstl.datasets.dataloader_parflow import (
 )
 
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
-STATS_OUT = "/home/huanghui/data/ParFlow-transformer/stats.npz"
+STATS_OUT = "/home/huanghui/data/ParFlow-transformer/stats"
+# perm_x_alpha_n_porosity
+STATS_NAME = "stats_press_evapotrans_alpha_n_porosity"
+STATS_OUT = os.path.join(STATS_OUT, f"{STATS_NAME}.npz")
 SPATIAL_STRIDE = 1
 TIME_STRIDE = 1
 MAX_FILES = 0
@@ -20,6 +29,8 @@ PRESS_ROOT = None
 EVAP_ROOT = None
 
 STATIC_ROOT = None
+# perm_x,alpha,n,porosity
+STATIC_DATA = "alpha,n,porosity"  # 逗号分隔关键词（大小写不敏感），为 None 时使用全部静态数据
 # Outlier handling parameters for pressure data
 APPLY_PRESS_OUTLIER_FIX = True
 PRESS_ABS_OUTLIER_THRESHOLD = -10000.0
@@ -204,10 +215,16 @@ def main():
         evap_root = EVAP_ROOT
     if STATIC_ROOT is not None:
         static_root = STATIC_ROOT
+    if STATIC_DATA is not None and static_root is None:
+        raise ValueError("STATIC_DATA is set but static_root is None")
 
     press_files = _list_pfb_files(press_root)
     evap_files = _list_pfb_files(evap_root) if evap_root is not None else None
-    static_arr = _read_static_stack(static_root) if static_root is not None else None
+    static_arr = (
+        _read_static_stack(static_root, static_data=STATIC_DATA)
+        if static_root is not None
+        else None
+    )
     max_files = MAX_FILES if MAX_FILES > 0 else None
 
     mean, std = compute_mean_std(

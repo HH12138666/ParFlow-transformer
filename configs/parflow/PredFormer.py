@@ -4,7 +4,11 @@ model_config = {
     # press h w c
     'height': 146,
     'width': 252,
-    'in_channels': 14,   # 输入：压力 10 层 + evaptrans 4 层
+    'input_channels': 36,   # 原始输入：压力 10 层 + evaptrans 4 层 + static 22 通道
+    'dynamic_channels': 14, # 压力 10 层 + evaptrans 4 层
+    'static_in_channels': 22,
+    'static_out_channels': 6, # 静态压缩到 6 层
+    'in_channels': 20,   # 动态 14 + 静态压缩 6
     'out_channels': 10,  # 输出：仅压力 10 层
     
     # space stride
