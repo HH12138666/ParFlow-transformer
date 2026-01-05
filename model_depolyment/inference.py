@@ -1,6 +1,8 @@
 import os
 import sys
 from pathlib import Path
+import glob
+import re
 import numpy as np
 import time
 from datetime import datetime
@@ -8,55 +10,168 @@ import torch
 repo = "/home/huanghui/data/ParFlow-transformer"
 sys.path.insert(0, repo)
 
-from configs.parflow.PredFormer import model_config as _model_cfg
+from configs.parflow.PredFormer_infer import model_config as _model_cfg
 from openstl.models import PredFormer_Model
-from openstl.datasets.dataloader_parflow import (
-    _resolve_parflow_roots,
-    _list_pfb_files,
-    _read_evap_frame,
-    _read_static_stack,
-    _build_space_coords,
-    _interpolate_outliers,
-    EPS,
-    )
 from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb, write_pfb
 
 # ---- User configuration ----
 # Fill these before running.
 PARFLOW_PATH = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press"
-CHECKPOINT_NAME = "2025-12-22-14-40_PredFormer_depth4_Quadruplet_FACTS_sd0.25_dp0.1_ps16_bs10_256_8_32_5e-4_Adamw_cosine_50ep"
+# 选择的checkpoint名称
+CHECKPOINT_NAME = "2026-01-04-17-27_FACTS"
 CHECKPOINT_PATH = os.path.join(PARFLOW_PATH, CHECKPOINT_NAME, "checkpoint.pth")
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
-OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data"
-RUN_PARAM = "press+evapotrans_in10_out10_rollout700"  # 
-USE_STATIC = False
+OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press"
+# perm_x_n_alpha_porosity
+RUN_PARAM = "press+evapotrans+perm_x_n_alpha_porosity_cnn10_losspress10_in12_out12_rollout700"  # 
+USE_STATIC = True
+#perm_x,alpha_z6-9,n_z6-9,porosity_z6-9
+STATIC_DATA = "perm_x,alpha_z6-9,n_z6-9,porosity_z6-9"  
 ABS_OUTLIER_THRESHOLD = -10000.0
 OUTLIER_STD_MULT = 5
+USE_PRED_EVAP = True  # use predicted evap instead of reading real evap files
 
-# Prediction range (index in sorted press files).
-# Use strings like "00000" if you want to keep the visual format.
+# Keep in sync with training preprocessing.
+EPS = 1e-6
+EVAP_CHANNELS = [6, 7, 8, 9]
+PRESS_CHANNELS = 10
+
+# Prediction range (file number in sorted press files, 1-based if files start at 00001).
+# Use strings like "00001" if you want to keep the visual format.
 START_INDEX = "07000"
 END_INDEX = "08760"  # empty means use last available index
 
 DEVICE = "cuda"
 
-# Use the same pre/aft as training (can override).
-PRE_SEQ = 10
-AFT_SEQ = 10
+# Use config defaults from PredFormer_infer.py.
+PRE_SEQ = int(_model_cfg["pre_seq"])
+AFT_SEQ = int(_model_cfg["after_seq"])
+
 USE_ROLLOUT = True  # set True to roll forward with model outputs
 ROLL_AFT = 700  # total hours to roll out when USE_ROLLOUT=True
 STRIDE = ROLL_AFT if USE_ROLLOUT else AFT_SEQ  # no overlap between prediction windows
 
 # Spatial tiling (enable for large frames).
-SPACE_H = 60
-SPACE_W = 84
-SPACE_STRIDE_H = 30
-SPACE_STRIDE_W = 42
+SPACE_H = _model_cfg.get("space_h", None)
+SPACE_W = _model_cfg.get("space_w", None)
+SPACE_STRIDE_H = _model_cfg.get("space_stride_h", None)
+SPACE_STRIDE_W = _model_cfg.get("space_stride_w", None)
 
 # Stats for normalization.
-STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats.npz"
-OUT_CHANNELS = 10  # press channels
+STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats/stats_press_evapotrans_perm_x_alpha_n_porosity.npz"
+OUT_CHANNELS = int(_model_cfg["out_channels"])
+
+
+def _natural_key(p):
+    b = os.path.basename(p)
+    s = re.split(r'(\d+)', b)
+    return [int(t) if t.isdigit() else t for t in s]
+
+
+def _list_pfb_files(root):
+    files = sorted(glob.glob(os.path.join(root, '*.pfb')), key=_natural_key)
+    if not files:
+        raise FileNotFoundError(f'No .pfb files found under: {root}')
+    return files
+
+
+def _resolve_parflow_roots(data_root, use_static=True):
+    base = Path(data_root)
+    press_root = str(base / "press")
+    evap_root = str(base / "evapotrans")
+    static_root = str(base / "static") if use_static else None
+    return press_root, evap_root, static_root
+
+
+def _parse_static_data(static_data):
+    if static_data is None:
+        return None
+    if isinstance(static_data, (list, tuple)):
+        patterns = [str(x).strip() for x in static_data if str(x).strip()]
+    else:
+        patterns = [p.strip() for p in str(static_data).split(',') if p.strip()]
+    return patterns or None
+
+
+def _filter_static_files(files, static_data):
+    patterns = _parse_static_data(static_data)
+    if not patterns:
+        return files
+    matched = []
+    for f in files:
+        name = os.path.basename(f)
+        if any(re.search(pat, name, re.IGNORECASE) for pat in patterns):
+            matched.append(f)
+    if not matched:
+        raise FileNotFoundError(f'No static .pfb files matched patterns: {patterns}')
+    return matched
+
+
+def _read_static_stack(static_root, static_data=None):
+    if static_root is None:
+        return None
+    files = _list_pfb_files(static_root)
+    files = _filter_static_files(files, static_data)
+    arrays = []
+    for f in files:
+        arr = read_pfb(get_absolute_path(str(f))).astype(np.float32)
+        if arr.ndim == 2:
+            arr = arr[None, ...]
+        elif arr.ndim != 3:
+            raise ValueError(f'Expected 2D/3D static array, got shape {arr.shape} for {f}')
+        arrays.append(arr)
+    return np.concatenate(arrays, axis=0)
+
+
+def _read_evap_frame(evap_path):
+    if evap_path is None:
+        raise ValueError("evap_path is required when reading evaptrans data")
+    if not Path(evap_path).exists():
+        raise FileNotFoundError(f"Evaptrans file not found: {evap_path}")
+    arr = read_pfb(get_absolute_path(str(evap_path))).astype(np.float32)
+    if arr.ndim != 3:
+        raise ValueError(f'Expected 3D evaptrans array, got shape {arr.shape} for {evap_path}')
+    return arr[EVAP_CHANNELS, ...]
+
+
+def _interpolate_outliers(arr, abs_threshold=ABS_OUTLIER_THRESHOLD, std_mult=OUTLIER_STD_MULT):
+    if arr.ndim != 3:
+        raise ValueError(f"Expected 3D array for interpolation, got shape {arr.shape}.")
+    repaired = arr.astype(np.float32, copy=True)
+    c, h, w = repaired.shape
+    flat = repaired.reshape(c, -1)
+    abs_mask = flat < abs_threshold if abs_threshold is not None else np.zeros_like(flat, dtype=bool)
+    valid = np.ma.array(flat, mask=abs_mask)
+    channel_mean = valid.mean(axis=1, keepdims=True).filled(0.0)
+    channel_std = valid.std(axis=1, keepdims=True).filled(0.0)
+    channel_std = np.maximum(channel_std, EPS)
+    low = channel_mean - std_mult * channel_std
+    high = channel_mean + std_mult * channel_std
+    mask_dyn = (flat < low) | (flat > high)
+    mask = abs_mask | mask_dyn
+    if not mask.any():
+        return repaired
+    flat[mask] = np.broadcast_to(channel_mean, flat.shape)[mask]
+    return flat.reshape(c, h, w)
+
+
+def _build_space_coords(height, width, space_h, space_w, space_stride_h=None, space_stride_w=None):
+    if space_h is None or space_w is None:
+        return [(0, 0)]
+    stride_h = space_stride_h or space_h
+    stride_w = space_stride_w or space_w
+    if space_h > height or space_w > width:
+        raise ValueError(
+            f"Space size {(space_h, space_w)} exceeds frame size {(height, width)}."
+        )
+    coords_h = list(range(0, height - space_h + 1, stride_h))
+    if not coords_h or coords_h[-1] != height - space_h:
+        coords_h.append(height - space_h)
+    coords_w = list(range(0, width - space_w + 1, stride_w))
+    if not coords_w or coords_w[-1] != width - space_w:
+        coords_w.append(width - space_w)
+    return [(top, left) for top in coords_h for left in coords_w]
 
 
 def _strip_module_prefix(state_dict):
@@ -157,10 +272,16 @@ def main():
     if len(press_files) != len(evap_files):
         raise ValueError(f"press/evap file counts do not match: {len(press_files)} vs {len(evap_files)}")
 
-    static_arr = _read_static_stack(static_root) if static_root is not None else None
+    static_arr = (
+        _read_static_stack(static_root, static_data=STATIC_DATA)
+        if static_root is not None
+        else None
+    )
 
-    end_idx = _parse_index(END_INDEX, len(press_files) - 1)
-    start_idx = _parse_index(START_INDEX, 0)
+    raw_end = _parse_index(END_INDEX, None)
+    end_idx = len(press_files) - 1 if raw_end is None else max(0, raw_end - 1)
+    raw_start = _parse_index(START_INDEX, None)
+    start_idx = 0 if raw_start is None else max(0, raw_start - 1)
     total_aft = ROLL_AFT if USE_ROLLOUT else AFT_SEQ
     if end_idx - start_idx + 1 < PRE_SEQ + total_aft:
         raise ValueError("Not enough frames for the requested range and seq lengths")
@@ -184,12 +305,11 @@ def main():
     std_y = std[:OUT_CHANNELS]
 
     cfg = dict(_model_cfg)
-    cfg["pre_seq"] = PRE_SEQ
-    cfg["after_seq"] = AFT_SEQ
-    cfg["space_h"] = SPACE_H
-    cfg["space_w"] = SPACE_W
-    cfg["in_channels"] = C
-    cfg["out_channels"] = OUT_CHANNELS
+    use_pred_evap = USE_PRED_EVAP and OUT_CHANNELS > PRESS_CHANNELS
+    if USE_PRED_EVAP and OUT_CHANNELS <= PRESS_CHANNELS:
+        raise ValueError(
+            "USE_PRED_EVAP=True requires OUT_CHANNELS to include evap (e.g., 14)."
+        )
 
     model = PredFormer_Model(cfg).to(DEVICE)
     ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
@@ -253,11 +373,15 @@ def main():
                     src_name = Path(press_files[idx]).name
                     out_name = f"pred_{src_name}"
                     out_path = out_dir / out_name
-                    write_pfb(str(out_path), pred_full[k].astype(np.float64), dist=False)
+                    write_pfb(
+                        str(out_path),
+                        pred_full[k][:PRESS_CHANNELS].astype(np.float64),
+                        dist=False,
+                    )
 
                     combined = _build_combined_from_pred(
                         pred_full[k],
-                        evap_path=evap_files[idx] if evap_files is not None else None,
+                        evap_path=None if use_pred_evap else (evap_files[idx] if evap_files is not None else None),
                         static_arr=static_arr,
                     )
                     history.append(combined)
@@ -291,7 +415,11 @@ def main():
                 src_name = Path(press_files[idx]).name
                 out_name = f"pred_{src_name}"
                 out_path = out_dir / out_name
-                write_pfb(str(out_path), pred_full[k].astype(np.float64), dist=False)
+                write_pfb(
+                    str(out_path),
+                    pred_full[k][:PRESS_CHANNELS].astype(np.float64),
+                    dist=False,
+                )
 
     elapsed = time.time() - start_time
     print(f"✅ Inference done. Elapsed time: {elapsed:.2f}s")

@@ -221,7 +221,7 @@ class ParFlowDataset(Dataset):
                 space_stride_w = None,
                 evap_root = None,
                 static_root = None,
-                target_channels = None,
+                out_channels = None,
                 static_data = None,):
         super().__init__()
         split = str(split).lower()
@@ -241,7 +241,7 @@ class ParFlowDataset(Dataset):
         self.static_root = static_root
         self.static_data = static_data
         self.static_arr = _read_static_stack(self.static_root, self.static_data) if self.static_root is not None else None
-        self.target_channels = target_channels  # 仅用于标签 y，输入 x 仍保留全部通道
+        self.out_channels = out_channels  # 仅用于标签 y，输入 x 仍保留全部通道
         
         if self.use_space:
             self.space_stride_h = space_stride_h or self.space_h
@@ -350,8 +350,8 @@ class ParFlowDataset(Dataset):
           
         x = win[: self.pre]
         y = win[self.pre : self.pre + self.aft]
-        if self.target_channels is not None:
-            y = y[:, :self.target_channels, :, :]  # 只保留压力通道
+        if self.out_channels is not None:
+            y = y[:, :self.out_channels, :, :]  # 只保留预测通道
         
         if self.use_space:
             x = x[..., top : top + self.space_h, left : left + self.space_w]
@@ -363,9 +363,9 @@ class ParFlowDataset(Dataset):
         if NORMALIZE and self.mean_t is not None and self.std_t is not None:
             x = (x - self.mean_t) / (self.std_t + EPS)
             if NORMALIZE_TARGET:
-                if self.target_channels is not None:
-                    mean_y = self.mean_t[:, :self.target_channels, :, :]
-                    std_y = self.std_t[:, :self.target_channels, :, :]
+                if self.out_channels is not None:
+                    mean_y = self.mean_t[:, :self.out_channels, :, :]
+                    std_y = self.std_t[:, :self.out_channels, :, :]
                     y = (y - mean_y) / (std_y + EPS)
                 else:
                     y = (y - self.mean_t) / (self.std_t + EPS)
@@ -375,7 +375,7 @@ class ParFlowDataset(Dataset):
 
 def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6,aft_seq_length = 6,
               in_shape = None,distributed = False,use_augment = False,use_prefetcher = False,drop_last = False,
-              space_h = None,space_w = None,space_stride_h= None,space_stride_w= None,target_channels = None,
+              space_h = None,space_w = None,space_stride_h= None,space_stride_w= None,out_channels = None,
               static_data = None,
               ):
 
@@ -385,17 +385,17 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
     train_ds = ParFlowDataset(press_root,'train',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=use_augment,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,target_channels=target_channels,static_data=static_data,)
+        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,)
     
     val_ds = ParFlowDataset(press_root, 'val',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=False,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,target_channels=target_channels,static_data=static_data,)
+        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,)
     
     test_ds = ParFlowDataset(press_root,'test',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=False,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,target_channels=target_channels,static_data=static_data,)
+        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,)
 
     input_channels = train_ds.C
 
@@ -451,7 +451,7 @@ if __name__ == "__main__":
     space_w = 84
     space_stride_h = 30
     space_stride_w = 42
-    target_channels = 10  # 仅预测压力通道
+    out_channels = 14  # 预测压力 + evaptrans 通道
 
     train_loader, vali_loader, test_loader = load_data(
         batch_size,
@@ -469,8 +469,8 @@ if __name__ == "__main__":
         space_w=space_w,
         space_stride_h=space_stride_h,
         space_stride_w=space_stride_w,
-        target_channels=target_channels,
-        static_data='perm_x,alpha,n_z6-9,porosity',
+        out_channels=out_channels,
+        static_data='perm_x,alpha_z6-9,n_z6-9,porosity_z6-9',
     )
 
     for x, y in train_loader:

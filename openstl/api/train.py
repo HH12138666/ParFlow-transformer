@@ -326,7 +326,18 @@ class BaseExperiment(object):
         
         if gather_data:
             metric_list, spatial_norm, channel_names = self.args.metrics, True, None
-            eval_res, eval_log = metric(results['preds'], results['trues'],
+            save_channels = getattr(self.args, "save_channels", None)
+            preds_eval = results['preds']
+            trues_eval = results['trues']
+            if save_channels is not None:
+                if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
+                    raise ValueError(
+                        f"Metrics expect at least {save_channels} channels, got "
+                        f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
+                    )
+                preds_eval = preds_eval[:, :, :save_channels, ...]
+                trues_eval = trues_eval[:, :, :save_channels, ...]
+            eval_res, eval_log = metric(preds_eval, trues_eval,
                                         self.vali_loader.dataset.mean, self.vali_loader.dataset.std,
                                         metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
         results['metrics'] = np.array([eval_res['mae'], eval_res['mse'],eval_res['rmse'], eval_res['mape']])
@@ -343,10 +354,13 @@ class BaseExperiment(object):
                     epoch_tag = f'epoch_{self._epoch + 1:03d}'
                     save_stride = max(1, int(save_stride))
                     save_indices = slice(None, None, save_stride)
+                    save_channels = getattr(self.args, "save_channels", 10)
                     for np_data in ['inputs', 'trues', 'preds', 'metrics']:
                         data_to_save = results[np_data]
                         if np_data in {'inputs', 'trues', 'preds'} and save_stride > 1:
                             data_to_save = data_to_save[save_indices]
+                        if np_data in {'inputs', 'trues', 'preds'} and data_to_save.ndim >= 3:
+                            data_to_save = data_to_save[:, :, :save_channels, ...]
                         np.save(osp.join(folder_path, f'{np_data}_{epoch_tag}.npy'), data_to_save)                      
 
         return results['loss'].mean()
@@ -365,7 +379,18 @@ class BaseExperiment(object):
         metric_list, spatial_norm, channel_names = self.args.metrics, True, None
 
         
-        eval_res, eval_log = metric(results['preds'], results['trues'],
+        save_channels = getattr(self.args, "save_channels", None)
+        preds_eval = results['preds']
+        trues_eval = results['trues']
+        if save_channels is not None:
+            if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
+                raise ValueError(
+                    f"Metrics expect at least {save_channels} channels, got "
+                    f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
+                )
+            preds_eval = preds_eval[:, :, :save_channels, ...]
+            trues_eval = trues_eval[:, :, :save_channels, ...]
+        eval_res, eval_log = metric(preds_eval, trues_eval,
                                     self.test_loader.dataset.mean, self.test_loader.dataset.std,
                                     metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
         
@@ -376,8 +401,12 @@ class BaseExperiment(object):
             folder_path = osp.join(self.path, 'saved')
             check_dir(folder_path)
 
+            save_channels = getattr(self.args, "save_channels", 10)
             for np_data in ['metrics', 'inputs', 'trues', 'preds']:
-                np.save(osp.join(folder_path, np_data + '.npy'), results[np_data])
+                data_to_save = results[np_data]
+                if np_data in {'inputs', 'trues', 'preds'} and data_to_save.ndim >= 3:
+                    data_to_save = data_to_save[:, :, :save_channels, ...]
+                np.save(osp.join(folder_path, np_data + '.npy'), data_to_save)
 
         return eval_res['mse']
 
@@ -393,7 +422,11 @@ class BaseExperiment(object):
         if self._rank == 0:
             folder_path = osp.join(self.path, 'saved')
             check_dir(folder_path)
+            save_channels = getattr(self.args, "save_channels", 10)
             for np_data in ['inputs', 'trues', 'preds']:
-                np.save(osp.join(folder_path, np_data + '.npy'), results[np_data])
+                data_to_save = results[np_data]
+                if data_to_save.ndim >= 3:
+                    data_to_save = data_to_save[:, :, :save_channels, ...]
+                np.save(osp.join(folder_path, np_data + '.npy'), data_to_save)
 
         return None

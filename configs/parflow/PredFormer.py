@@ -6,17 +6,18 @@ model_config = {
     'width': 252,
     'input_channels': 36,   # 原始输入：压力 10 层 + evaptrans 4 层 + static 22 通道
     'dynamic_channels': 14, # 压力 10 层 + evaptrans 4 层
-    'static_in_channels': 22,
-    'static_out_channels': 6, # 静态压缩到 6 层
-    'in_channels': 20,   # 动态 14 + 静态压缩 6
-    'out_channels': 10,  # 输出：仅压力 10 层
+    'static_in_channels': 22, # 静态输入通道数，如果不使用cnn处理静态数据，则设为None
+    'static_out_channels': 10, # 静态压缩到 10 层，如果不使用cnn处理静态数据，则设为None
+    'in_channels': 24,   # 动态 14 + 静态压缩 10
+    'out_channels': 14,  # 输出：压力 10 层 + evaptrans 4 层
+
     
     # space stride
     'space_h': 60,
     'space_w': 84,
     'space_stride_h': 30,
     'space_stride_w': 42,
-    'val_save_stride': 0,
+    'val_save_stride': 0,# 验证集保存步长，0表示不保存
     
     # video length in and out
     'pre_seq': 12,

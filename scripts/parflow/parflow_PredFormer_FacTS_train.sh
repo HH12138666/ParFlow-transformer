@@ -17,7 +17,7 @@ python tools/train.py \
     --res_dir work_dirs \
     --batch_size  28\
     --val_batch_size 28 \
-    --epoch 150 \
+    --epoch 60 \
     --overwrite \
     --lr 5e-4 \
     --sched cosine \
@@ -25,6 +25,8 @@ python tools/train.py \
     --opt adamw \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
-    --early_stop_epoch 80 \
+    --early_stop_epoch 40 \
     --num_workers 28 \
-    --static_data perm_x,alpha,n_z6-9,porosity \
+    --static_data perm_x,alpha_z6-9,n_z6-9,porosity_z6-9 \
+    --loss_channels 10 \
+    --save_channels 10 \

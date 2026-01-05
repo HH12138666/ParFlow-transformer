@@ -14,8 +14,8 @@ plt.rcParams['axes.unicode_minus'] = False
 # -------------------------------
 log_file_path = 'work_dirs/ParFlow_press'  
 # 请根据实际情况修改log_file_result和log_file_name
-log_file_result = '2025-12-29-14-18_FACTS'
-log_file_name = f'train_20251229_141852.log'
+log_file_result = '2026-01-04-17-27_FACTS'
+log_file_name = f'train_20260104_172807.log'
 
 
 log_file_path_final = os.path.join(log_file_path, log_file_result, log_file_name)

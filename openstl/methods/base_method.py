@@ -48,7 +48,7 @@ class Base_method(object):
         # setup automatic mixed-precision (AMP) loss scaling and op casting
         self.amp_autocast = suppress  # do nothing
         self.loss_scaler = None
-        # setup metrics 修改
+        # setup metrics 
         self.metric_list, self.spatial_norm = ['mse', 'rmse','mae','mape'], True
 
     def _build_model(self, **kwargs):
@@ -114,15 +114,38 @@ class Base_method(object):
                 batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
                 pred_y = self._predict(batch_x, batch_y)
 
+            loss_channels = getattr(self.args, "loss_channels", 10)
+            if pred_y.shape[2] < loss_channels or batch_y.shape[2] < loss_channels:
+                raise ValueError(
+                    f"Loss expects at least {loss_channels} channels, got "
+                    f"{pred_y.shape[2]} (pred) and {batch_y.shape[2]} (true)."
+                )
             if gather_data:  # return raw datas
-                loss_value = self.criterion(pred_y, batch_y).detach().cpu().numpy().reshape(1)
+                loss_value = self.criterion(
+                    pred_y[:, :, :loss_channels, ...],
+                    batch_y[:, :, :loss_channels, ...],
+                ).detach().cpu().numpy().reshape(1)
                 results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
                                         [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy(), loss_value])))
             else:  # return metrics
-                eval_res, _ = metric(pred_y.cpu().numpy(), batch_y.cpu().numpy(),
+                pred_eval = pred_y.cpu().numpy()
+                true_eval = batch_y.cpu().numpy()
+                save_channels = getattr(self.args, "save_channels", None)
+                if save_channels is not None:
+                    if pred_eval.shape[2] < save_channels or true_eval.shape[2] < save_channels:
+                        raise ValueError(
+                            f"Metrics expect at least {save_channels} channels, got "
+                            f"{pred_eval.shape[2]} (pred) and {true_eval.shape[2]} (true)."
+                        )
+                    pred_eval = pred_eval[:, :, :save_channels, ...]
+                    true_eval = true_eval[:, :, :save_channels, ...]
+                eval_res, _ = metric(pred_eval, true_eval,
                                      data_loader.dataset.mean, data_loader.dataset.std,
                                      metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
-                eval_res['loss'] = self.criterion(pred_y, batch_y).cpu().numpy()
+                eval_res['loss'] = self.criterion(
+                    pred_y[:, :, :loss_channels, ...],
+                    batch_y[:, :, :loss_channels, ...],
+                ).cpu().numpy()
                 for k in eval_res.keys():
                     eval_res[k] = eval_res[k].reshape(1)
                 results.append(eval_res)
@@ -165,16 +188,38 @@ class Base_method(object):
                 batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
                 pred_y = self._predict(batch_x, batch_y)
 
+            loss_channels = getattr(self.args, "loss_channels", 10)
+            if pred_y.shape[2] < loss_channels or batch_y.shape[2] < loss_channels:
+                raise ValueError(
+                    f"Loss expects at least {loss_channels} channels, got "
+                    f"{pred_y.shape[2]} (pred) and {batch_y.shape[2]} (true)."
+                )
             if gather_data:  # return raw datas
-                
-                loss_value = self.criterion(pred_y, batch_y).detach().cpu().numpy().reshape(1)
+                loss_value = self.criterion(
+                    pred_y[:, :, :loss_channels, ...],
+                    batch_y[:, :, :loss_channels, ...],
+                ).detach().cpu().numpy().reshape(1)
                 results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
                                         [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy(), loss_value])))
             else:  # evaluation-only path when we do not need to store raw tensors
-                eval_res, _ = metric(pred_y.cpu().numpy(), batch_y.cpu().numpy(),
+                pred_eval = pred_y.cpu().numpy()
+                true_eval = batch_y.cpu().numpy()
+                save_channels = getattr(self.args, "save_channels", None)
+                if save_channels is not None:
+                    if pred_eval.shape[2] < save_channels or true_eval.shape[2] < save_channels:
+                        raise ValueError(
+                            f"Metrics expect at least {save_channels} channels, got "
+                            f"{pred_eval.shape[2]} (pred) and {true_eval.shape[2]} (true)."
+                        )
+                    pred_eval = pred_eval[:, :, :save_channels, ...]
+                    true_eval = true_eval[:, :, :save_channels, ...]
+                eval_res, _ = metric(pred_eval, true_eval,
                                      data_loader.dataset.mean, data_loader.dataset.std,
                                      metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
-                eval_res['loss'] = self.criterion(pred_y, batch_y).cpu().numpy()
+                eval_res['loss'] = self.criterion(
+                    pred_y[:, :, :loss_channels, ...],
+                    batch_y[:, :, :loss_channels, ...],
+                ).cpu().numpy()
                 for k in eval_res.keys():
                     eval_res[k] = eval_res[k].reshape(1)
                 results.append(eval_res)
@@ -216,6 +261,9 @@ class Base_method(object):
         # Align to the actually collected samples to avoid indexing errors
 
         if sample_count != len(sample_indices):
+            print(f"Warning: sample count ({sample_count}) does not match "
+                  f"sample_indices length ({len(sample_indices)}). "
+                  f"Truncating sample_indices.")
             sample_indices = sample_indices[:sample_count]
 
         # Build a robust mapping from raw time indices to contiguous slots
@@ -283,7 +331,18 @@ class Base_method(object):
         eval_log = ""
         
         if should_gather:
-            eval_res, eval_log = metric(results['preds'], results['trues'],
+            save_channels = getattr(self.args, "save_channels", None)
+            preds_eval = results['preds']
+            trues_eval = results['trues']
+            if save_channels is not None:
+                if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
+                    raise ValueError(
+                        f"Metrics expect at least {save_channels} channels, got "
+                        f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
+                    )
+                preds_eval = preds_eval[:, :, :save_channels, ...]
+                trues_eval = trues_eval[:, :, :save_channels, ...]
+            eval_res, eval_log = metric(preds_eval, trues_eval,
                                         dataset.mean, dataset.std,
                                         metrics=self.metric_list, spatial_norm=self.spatial_norm)
             for k in self.metric_list:
@@ -320,7 +379,18 @@ class Base_method(object):
             
         eval_log = ""
         if should_gather:
-            eval_res, eval_log = metric(results['preds'], results['trues'],
+            save_channels = getattr(self.args, "save_channels", None)
+            preds_eval = results['preds']
+            trues_eval = results['trues']
+            if save_channels is not None:
+                if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
+                    raise ValueError(
+                        f"Metrics expect at least {save_channels} channels, got "
+                        f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
+                    )
+                preds_eval = preds_eval[:, :, :save_channels, ...]
+                trues_eval = trues_eval[:, :, :save_channels, ...]
+            eval_res, eval_log = metric(preds_eval, trues_eval,
                                         dataset.mean, dataset.std,
                                         metrics=self.metric_list, spatial_norm=self.spatial_norm)
             for k in self.metric_list:

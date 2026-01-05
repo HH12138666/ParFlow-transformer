@@ -25,13 +25,15 @@ class PredFormer(Base_method):
             return pred
         in_ch = self.model.in_channels
         out_ch = self.model.out_channels
-        if in_ch == out_ch:
+        # Prefer full input channel count (before static projection) when available.
+        input_ch = getattr(self.model, "input_channels", in_ch)
+        if input_ch == out_ch:
             return pred
-        if prev_seq.shape[2] < in_ch:
-            raise ValueError(f"Input has {prev_seq.shape[2]} channels, expected {in_ch}")
-        if out_ch > in_ch:
-            raise ValueError(f"Output channels {out_ch} cannot exceed input channels {in_ch}")
-        aux = prev_seq[:, :, out_ch:in_ch, :, :]
+        if prev_seq.shape[2] < input_ch:
+            raise ValueError(f"Input has {prev_seq.shape[2]} channels, expected {input_ch}")
+        if out_ch > input_ch:
+            raise ValueError(f"Output channels {out_ch} cannot exceed input channels {input_ch}")
+        aux = prev_seq[:, :, out_ch:input_ch, :, :]
         return torch.cat([pred, aux], dim=2)
     def _predict(self, batch_x, batch_y=None, **kwargs):
         """Forward the model"""
@@ -79,7 +81,16 @@ class PredFormer(Base_method):
 
             with self.amp_autocast():
                 pred_y = self._predict(batch_x)
-                loss = self.criterion(pred_y, batch_y)
+                loss_channels = getattr(self.args, "loss_channels", 10)
+                if pred_y.shape[2] < loss_channels or batch_y.shape[2] < loss_channels:
+                    raise ValueError(
+                        f"Loss expects at least {loss_channels} channels, got "
+                        f"{pred_y.shape[2]} (pred) and {batch_y.shape[2]} (true)."
+                    )
+                loss = self.criterion(
+                    pred_y[:, :, :loss_channels, ...],
+                    batch_y[:, :, :loss_channels, ...],
+                )
 
             if not self.dist:
                 losses_m.update(loss.item(), batch_x.size(0))
