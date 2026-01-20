@@ -41,6 +41,30 @@ def _natural_key(p):
     s = re.split(r'(\d+)', b)
     return [int(t) if t.isdigit() else t for t in s]
 
+def _extract_hour_id(path):
+    name = os.path.basename(path)
+    m = re.search(r"(\d+)(?!.*\d)", name)
+    if not m:
+        return None
+    return int(m.group(1))
+
+def _build_id_map(files, label):
+    items = {}
+    for f in files:
+        fid = _extract_hour_id(f)
+        if fid is None:
+            raise ValueError(f"{label} file has no hour id: {f}")
+        if fid in items:
+            raise ValueError(f"Duplicate {label} hour id {fid}: {items[fid]} and {f}")
+        items[fid] = f
+    if not items:
+        raise ValueError(f"No {label} files with valid hour ids found.")
+    return items
+
+def _check_hour_continuity(ids, label):
+    for prev, cur in zip(ids, ids[1:]):
+        if cur != prev + 1:
+            raise ValueError(f"Non-contiguous {label} hours: {prev} -> {cur}")
 
 def _list_pfb_files(root) :
     files = sorted(glob.glob(os.path.join(root, '*.pfb')), key=_natural_key)
@@ -222,7 +246,8 @@ class ParFlowDataset(Dataset):
                 evap_root = None,
                 static_root = None,
                 out_channels = None,
-                static_data = None,):
+                static_data = None,
+                align_by_hour_id = False,):
         super().__init__()
         split = str(split).lower()
         if split not in ('train', 'val', 'test'):
@@ -242,6 +267,7 @@ class ParFlowDataset(Dataset):
         self.static_data = static_data
         self.static_arr = _read_static_stack(self.static_root, self.static_data) if self.static_root is not None else None
         self.out_channels = out_channels  # 仅用于标签 y，输入 x 仍保留全部通道
+        self.align_by_hour_id = align_by_hour_id
         
         if self.use_space:
             self.space_stride_h = space_stride_h or self.space_h
@@ -254,12 +280,26 @@ class ParFlowDataset(Dataset):
         self.files = _list_pfb_files(self.press_root)
         if self.evap_root is not None:
             self.evap_files = _list_pfb_files(self.evap_root)
-            if len(self.evap_files) != len(self.files):
-                raise ValueError(
-                    f"press/evap file counts do not match: {len(self.files)} vs {len(self.evap_files)}"
-                )
         else:
             self.evap_files = None
+        if self.align_by_hour_id:
+            press_map = _build_id_map(self.files, "press")
+            press_ids = sorted(press_map)
+            self.files = [press_map[i] for i in press_ids]
+            if self.evap_files is not None:
+                evap_map = _build_id_map(self.evap_files, "evap")
+                missing = [i for i in press_ids if i not in evap_map]
+                if missing:
+                    raise ValueError(f"Missing evap hours for press ids (first 5): {missing[:5]}")
+                extra = [i for i in evap_map.keys() if i not in press_map]
+                if extra:
+                    raise ValueError(f"Evap hours not in press ids (first 5): {extra[:5]}")
+                self.evap_files = [evap_map[i] for i in press_ids]
+            _check_hour_continuity(press_ids, "press")
+        elif self.evap_files is not None and len(self.evap_files) != len(self.files):
+            raise ValueError(
+                f"press/evap file counts do not match: {len(self.files)} vs {len(self.evap_files)}"
+            )
 
         self.num_frames = len(self.files)
         sample = _read_combined_frame(
@@ -377,6 +417,7 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
               in_shape = None,distributed = False,use_augment = False,use_prefetcher = False,drop_last = False,
               space_h = None,space_w = None,space_stride_h= None,space_stride_w= None,out_channels = None,
               static_data = None,
+              align_by_hour_id = False,
               ):
 
     use_static = USE_STATIC or static_data is not None
@@ -385,17 +426,20 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
     train_ds = ParFlowDataset(press_root,'train',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=use_augment,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,)
+        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
+        align_by_hour_id=align_by_hour_id,)
     
     val_ds = ParFlowDataset(press_root, 'val',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=False,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,)
+        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
+        align_by_hour_id=align_by_hour_id,)
     
     test_ds = ParFlowDataset(press_root,'test',pre_seq_length,aft_seq_length,
         in_shape=in_shape,use_augment=False,
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,)
+        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
+        align_by_hour_id=align_by_hour_id,)
 
     input_channels = train_ds.C
 

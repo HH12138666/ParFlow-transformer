@@ -65,6 +65,10 @@ def create_parser():
                         help='Whether to drop the last batch in the val data loading')
     parser.add_argument('--static_data', type=str, default=None,
                         help='Comma-separated keywords to select static .pfb files (case-insensitive)')
+    parser.add_argument('--align_by_hour_id', action='store_true', default=True,
+                        help='Align press/evap files by hour id parsed from filenames')
+    parser.add_argument('--use_true_evap', action='store_true', default=True,
+                        help='Use true evap channels during autoregressive rollout')
     parser.add_argument('--loss_channels', type=int, default=10,
                         help='Number of leading channels used to compute loss (e.g., 10 for press, 14 for press+evap)')
     parser.add_argument('--save_channels', type=int, default=10,
@@ -190,6 +194,8 @@ def default_parser():
         'use_prefetcher': False,
         'drop_last': False,
         'static_data': None,
+        'align_by_hour_id': True,
+        'use_true_evap': True,
         'loss_channels': 10,
         'save_channels': 10,
         

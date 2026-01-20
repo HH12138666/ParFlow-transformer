@@ -8,7 +8,7 @@ import os
 from openstl.utils import measure_throughput
 from fvcore.nn import FlopCountAnalysis, flop_count_table
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-from openstl.modules import Attention, PreNorm, FeedForward
+from openstl.modules import Attention, CrossAttention, PreNorm, FeedForward
 import math
 
 class SwiGLU(nn.Module):
@@ -106,8 +106,15 @@ class PredFormer_Model(nn.Module):
         self.dynamic_channels = model_config.get('dynamic_channels', None)
         self.static_in_channels = model_config.get('static_in_channels', None)
         self.static_out_channels = model_config.get('static_out_channels', None)
+        self.static_kernel_size = model_config.get('static_kernel_size', 3)
         self.static_proj = None
         if self.static_in_channels is not None and self.static_out_channels is not None:
+            if not isinstance(self.static_kernel_size, int) or self.static_kernel_size < 1:
+                raise ValueError(f"static_kernel_size must be a positive int, got {self.static_kernel_size}")
+            if self.static_kernel_size % 2 == 0:
+                raise ValueError(
+                    f"static_kernel_size={self.static_kernel_size} must be odd to keep spatial size with padding."
+                )
             if self.dynamic_channels is None:
                 self.dynamic_channels = self.input_channels - self.static_in_channels
             expected_in = self.dynamic_channels + self.static_in_channels
@@ -122,7 +129,18 @@ class PredFormer_Model(nn.Module):
                     f"in_channels={self.in_channels} does not match "
                     f"dynamic_channels+static_out_channels={projected_in}."
                 )
-            self.static_proj = nn.Conv2d(self.static_in_channels, self.static_out_channels, kernel_size=1)
+            self.static_proj = nn.Conv2d(
+                self.static_in_channels,
+                self.static_out_channels,
+                kernel_size=self.static_kernel_size,
+                stride=1,
+                padding=self.static_kernel_size // 2,
+            )
+        if self.dynamic_channels is None:
+            if self.static_in_channels is not None:
+                self.dynamic_channels = self.input_channels - self.static_in_channels
+            else:
+                self.dynamic_channels = self.in_channels
         self.out_channels = model_config.get('out_channels', self.in_channels)
         self.num_classes = self.out_channels
         self.heads = model_config['heads']
@@ -140,6 +158,39 @@ class PredFormer_Model(nn.Module):
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b t c (h p1) (w p2) -> b t (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size),
             nn.Linear(self.patch_dim, self.dim),
+            )
+        self.pre_attn_type = model_config.get('pre_attn_type', 'none')
+        if self.pre_attn_type not in {'none', 'self', 'cross'}:
+            raise ValueError(f"Unknown pre_attn_type={self.pre_attn_type}")
+        self.pre_self_attn = None
+        self.pre_cross_attn = None
+        self.pre_cross_norm_q = None
+        self.pre_cross_norm_kv = None
+        self.to_patch_embedding_dyn = None
+        self.to_patch_embedding_static = None
+        if self.pre_attn_type == 'self':
+            self.pre_self_attn = PreNorm(
+                self.dim,
+                Attention(self.dim, heads=self.heads, dim_head=self.dim_head, dropout=self.attn_dropout),
+            )
+        elif self.pre_attn_type == 'cross':
+            static_channels = self.static_out_channels if self.static_proj is not None else self.static_in_channels
+            if static_channels is None:
+                raise ValueError("pre_attn_type='cross' requires static channels.")
+            dyn_patch_dim = self.dynamic_channels * self.patch_size ** 2
+            sta_patch_dim = static_channels * self.patch_size ** 2
+            self.to_patch_embedding_dyn = nn.Sequential(
+                Rearrange('b t c (h p1) (w p2) -> b t (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size),
+                nn.Linear(dyn_patch_dim, self.dim),
+            )
+            self.to_patch_embedding_static = nn.Sequential(
+                Rearrange('b t c (h p1) (w p2) -> b t (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size),
+                nn.Linear(sta_patch_dim, self.dim),
+            )
+            self.pre_cross_norm_q = nn.LayerNorm(self.dim)
+            self.pre_cross_norm_kv = nn.LayerNorm(self.dim)
+            self.pre_cross_attn = CrossAttention(
+                self.dim, heads=self.heads, dim_head=self.dim_head, dropout=self.attn_dropout
             )
         self.pos_embedding = nn.Parameter(sinusoidal_embedding(self.num_frames_in * self.num_patches, self.dim),
                                                requires_grad=False).view(1, self.num_frames_in, self.num_patches, self.dim)
@@ -159,9 +210,12 @@ class PredFormer_Model(nn.Module):
         B, T, C, H, W = x.shape
         if C != self.input_channels:
             raise ValueError(f"Expected input channels={self.input_channels}, got {C}")
-        if self.static_proj is not None:
+        dyn = None
+        static = None
+        if self.static_in_channels is not None:
             dyn = x[:, :, :self.dynamic_channels]
             static = x[:, :, self.dynamic_channels:self.dynamic_channels + self.static_in_channels]
+        if self.static_proj is not None:
             static = static.reshape(B * T, self.static_in_channels, H, W)
             static = self.static_proj(static)
             static = static.reshape(B, T, self.static_out_channels, H, W)
@@ -169,13 +223,30 @@ class PredFormer_Model(nn.Module):
         if x.shape[2] != self.in_channels:
             raise ValueError(f"Expected projected channels={self.in_channels}, got {x.shape[2]}")
         
-        # Patch Embedding
-        x = self.to_patch_embedding(x)
-        
-        # Posion Embedding
-        x += self.pos_embedding.to(x.device)
-        
-        b, t, n, _ = x.shape        
+        pos = self.pos_embedding.to(x.device)
+        if self.pre_attn_type == 'cross':
+            if dyn is None or static is None:
+                raise ValueError("pre_attn_type='cross' requires static channels.")
+            dyn_tok = self.to_patch_embedding_dyn(dyn)
+            static_tok = self.to_patch_embedding_static(static)
+            dyn_tok = dyn_tok + pos
+            static_tok = static_tok + pos
+            b, t, n, _ = dyn_tok.shape
+            q = dyn_tok.reshape(B * T, n, self.dim)
+            kv = static_tok.reshape(B * T, n, self.dim)
+            q = q + self.pre_cross_attn(
+                self.pre_cross_norm_q(q),
+                self.pre_cross_norm_kv(kv),
+            )
+            x = q.reshape(B, T, n, self.dim)
+        else:
+            x = self.to_patch_embedding(x)
+            x = x + pos
+            b, t, n, _ = x.shape
+            if self.pre_attn_type == 'self':
+                x_flat = x.reshape(B * T, n, self.dim)
+                x_flat = x_flat + self.pre_self_attn(x_flat)
+                x = x_flat.reshape(B, T, n, self.dim)
         
         # ts-t branch
         x_t = rearrange(x, 'b t n d -> b n t d')

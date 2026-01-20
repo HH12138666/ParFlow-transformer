@@ -1,5 +1,5 @@
-from .PredFormer_modules import Attention, PreNorm, FeedForward
+from .PredFormer_modules import Attention, CrossAttention, PreNorm, FeedForward
 
 __all__ = [
-    'Attention','PreNorm','FeedForward'
+    'Attention', 'CrossAttention', 'PreNorm', 'FeedForward'
 ]

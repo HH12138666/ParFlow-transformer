@@ -398,15 +398,16 @@ class BaseExperiment(object):
 
         if self._rank == 0:
             print_log(eval_log)
-            folder_path = osp.join(self.path, 'saved')
-            check_dir(folder_path)
-
-            save_channels = getattr(self.args, "save_channels", 10)
-            for np_data in ['metrics', 'inputs', 'trues', 'preds']:
-                data_to_save = results[np_data]
-                if np_data in {'inputs', 'trues', 'preds'} and data_to_save.ndim >= 3:
-                    data_to_save = data_to_save[:, :, :save_channels, ...]
-                np.save(osp.join(folder_path, np_data + '.npy'), data_to_save)
+            # Saving test outputs disabled by request.
+            # folder_path = osp.join(self.path, 'saved')
+            # check_dir(folder_path)
+            #
+            # save_channels = getattr(self.args, "save_channels", 10)
+            # for np_data in ['metrics', 'inputs', 'trues', 'preds']:
+            #     data_to_save = results[np_data]
+            #     if np_data in {'inputs', 'trues', 'preds'} and data_to_save.ndim >= 3:
+            #         data_to_save = data_to_save[:, :, :save_channels, ...]
+            #     np.save(osp.join(folder_path, np_data + '.npy'), data_to_save)
 
         return eval_res['mse']
 

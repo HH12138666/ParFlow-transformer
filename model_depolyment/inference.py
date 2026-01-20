@@ -19,28 +19,28 @@ from parflow.tools.io import read_pfb, write_pfb
 # Fill these before running.
 PARFLOW_PATH = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press"
 # 选择的checkpoint名称
-CHECKPOINT_NAME = "2026-01-04-17-27_FACTS"
+CHECKPOINT_NAME = "2026-01-07-21-11_FACTS"
 CHECKPOINT_PATH = os.path.join(PARFLOW_PATH, CHECKPOINT_NAME, "checkpoint.pth")
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
-OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press"
-# perm_x_n_alpha_porosity
-RUN_PARAM = "press+evapotrans+perm_x_n_alpha_porosity_cnn10_losspress10_in12_out12_rollout700"  # 
+OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press_true_evap"
+# +perm_x_n_alpha_porosity
+RUN_PARAM = "press+evapotrans+perm_x_n_alpha_porosity_true_evap_cnn10_k5_in12_out12_rollout700"  # 
 USE_STATIC = True
 #perm_x,alpha_z6-9,n_z6-9,porosity_z6-9
 STATIC_DATA = "perm_x,alpha_z6-9,n_z6-9,porosity_z6-9"  
 ABS_OUTLIER_THRESHOLD = -10000.0
 OUTLIER_STD_MULT = 5
-USE_PRED_EVAP = True  # use predicted evap instead of reading real evap files
+USE_PRED_EVAP = False  # use predicted evap instead of reading real evap files
 
 # Keep in sync with training preprocessing.
 EPS = 1e-6
 EVAP_CHANNELS = [6, 7, 8, 9]
 PRESS_CHANNELS = 10
 
-# Prediction range (file number in sorted press files, 1-based if files start at 00001).
+# Prediction range (hour id in file names, 1-based if files start at 00001).
 # Use strings like "00001" if you want to keep the visual format.
-START_INDEX = "07000"
-END_INDEX = "08760"  # empty means use last available index
+START_HOUR = "07700"
+END_HOUR = "08760"  # empty means use last available hour
 
 DEVICE = "cuda"
 
@@ -67,6 +67,14 @@ def _natural_key(p):
     b = os.path.basename(p)
     s = re.split(r'(\d+)', b)
     return [int(t) if t.isdigit() else t for t in s]
+
+
+def _extract_id(path):
+    name = os.path.basename(path)
+    m = re.search(r"(\d+)(?!.*\d)", name)
+    if not m:
+        return None
+    return m.group(1)
 
 
 def _list_pfb_files(root):
@@ -227,6 +235,8 @@ def _read_combined_frame_infer(press_path, evap_path=None, static_arr=None):
         abs_threshold=ABS_OUTLIER_THRESHOLD,
         std_mult=OUTLIER_STD_MULT,
     )
+    if press.shape[0] > PRESS_CHANNELS:
+        press = press[:PRESS_CHANNELS]
     if evap_path is None:
         combined = press
     else:
@@ -242,6 +252,8 @@ def _read_combined_frame_infer(press_path, evap_path=None, static_arr=None):
 
 
 def _build_combined_from_pred(press_pred, evap_path=None, static_arr=None):
+    if evap_path is not None and press_pred.shape[0] > PRESS_CHANNELS:
+        press_pred = press_pred[:PRESS_CHANNELS]
     combined = press_pred.astype(np.float32, copy=False)
     if evap_path is not None:
         evap = _read_evap_frame(evap_path)
@@ -253,6 +265,46 @@ def _build_combined_from_pred(press_pred, evap_path=None, static_arr=None):
             )
         combined = np.concatenate([combined, static_arr], axis=0)
     return combined
+
+
+def _build_evap_map(evap_files):
+    evap_map = {}
+    for f in evap_files:
+        fid = _extract_id(f)
+        if fid is None:
+            continue
+        evap_map[fid] = f
+    return evap_map
+
+
+def _get_evap_path_for_press(press_path, evap_map):
+    fid = _extract_id(press_path)
+    if fid is None:
+        raise ValueError(f"Cannot extract id from press file: {press_path}")
+    evap_path = evap_map.get(fid)
+    if evap_path is None:
+        raise ValueError(f"Evap file not found for id {fid} (press {press_path})")
+    return evap_path
+
+
+def _build_press_list(press_files):
+    items = []
+    for f in press_files:
+        fid = _extract_id(f)
+        if fid is None:
+            continue
+        items.append((int(fid), fid, f))
+    if not items:
+        raise ValueError("No press files with valid ids found.")
+    items.sort(key=lambda x: x[0])
+    return items
+
+
+def _find_index_by_hour(items, hour):
+    for idx, (h, _, _) in enumerate(items):
+        if h == hour:
+            return idx
+    raise ValueError(f"Hour {hour} not found in press files.")
 
 
 def main():
@@ -268,27 +320,41 @@ def main():
     if not USE_STATIC:
         static_root = None
     press_files = _list_pfb_files(press_root)
+    press_items = _build_press_list(press_files)
+    press_files = [p for _, _, p in press_items]
+    press_hours = [h for h, _, _ in press_items]
     evap_files = _list_pfb_files(evap_root)
-    if len(press_files) != len(evap_files):
-        raise ValueError(f"press/evap file counts do not match: {len(press_files)} vs {len(evap_files)}")
+    evap_map = _build_evap_map(evap_files)
+    if not evap_map:
+        raise ValueError("No evap files with valid ids found.")
 
     static_arr = (
         _read_static_stack(static_root, static_data=STATIC_DATA)
         if static_root is not None
         else None
     )
+    print("static_arr channels:", None if static_arr is None else static_arr.shape[0])
 
-    raw_end = _parse_index(END_INDEX, None)
-    end_idx = len(press_files) - 1 if raw_end is None else max(0, raw_end - 1)
-    raw_start = _parse_index(START_INDEX, None)
-    start_idx = 0 if raw_start is None else max(0, raw_start - 1)
+    raw_end = _parse_index(END_HOUR, None)
+    end_idx = len(press_files) - 1 if raw_end is None else _find_index_by_hour(press_items, int(raw_end))
+    raw_start = _parse_index(START_HOUR, None)
+    start_idx = 0 if raw_start is None else _find_index_by_hour(press_items, int(raw_start))
+    if end_idx < start_idx:
+        raise ValueError(f"END_HOUR ({END_HOUR}) is before START_HOUR ({START_HOUR}).")
+    for i in range(start_idx, end_idx):
+        if press_hours[i + 1] != press_hours[i] + 1:
+            raise ValueError(
+                f"Missing press hours between {press_hours[i]} and {press_hours[i + 1]}."
+            )
     total_aft = ROLL_AFT if USE_ROLLOUT else AFT_SEQ
     if end_idx - start_idx + 1 < PRE_SEQ + total_aft:
         raise ValueError("Not enough frames for the requested range and seq lengths")
 
+    press_path = press_files[start_idx]
+    evap_path = _get_evap_path_for_press(press_path, evap_map)
     sample = _read_combined_frame_infer(
-        press_files[start_idx],
-        evap_path=evap_files[start_idx],
+        press_path,
+        evap_path=evap_path,
         static_arr=static_arr,
     )
     C, H, W = sample.shape
@@ -328,15 +394,26 @@ def main():
     window_idx = 0
     for t0 in range(start_idx, end_idx - PRE_SEQ - total_aft + 2, STRIDE):
         window_idx += 1
+        start_hour = press_hours[t0]
+        pred_start_hour = press_hours[t0 + PRE_SEQ]
+        pred_end_hour = press_hours[t0 + PRE_SEQ + total_aft - 1]
         if USE_ROLLOUT:
-            print(f"[rollout {window_idx}/{total_windows}] t0={t0}, range={t0 + PRE_SEQ}..{t0 + PRE_SEQ + total_aft - 1}")
+            print(
+                f"[rollout {window_idx}/{total_windows}] t0={t0} (hour={start_hour}), "
+                f"pred_range={pred_start_hour}..{pred_end_hour}"
+            )
         else:
-            print(f"[window {window_idx}/{total_windows}] t0={t0}, range={t0 + PRE_SEQ}..{t0 + PRE_SEQ + total_aft - 1}")
+            print(
+                f"[window {window_idx}/{total_windows}] t0={t0} (hour={start_hour}), "
+                f"pred_range={pred_start_hour}..{pred_end_hour}"
+            )
         history = []
         for i in range(PRE_SEQ):
+            press_path = press_files[t0 + i]
+            evap_path = _get_evap_path_for_press(press_path, evap_map)
             arr = _read_combined_frame_infer(
-                press_files[t0 + i],
-                evap_path=evap_files[t0 + i],
+                press_path,
+                evap_path=evap_path,
                 static_arr=static_arr,
             )
             history.append(arr)
@@ -370,7 +447,8 @@ def main():
 
                 for k in range(block):
                     idx = t0 + PRE_SEQ + predicted + k
-                    src_name = Path(press_files[idx]).name
+                    press_path = press_files[idx]
+                    src_name = Path(press_path).name
                     out_name = f"pred_{src_name}"
                     out_path = out_dir / out_name
                     write_pfb(
@@ -381,7 +459,7 @@ def main():
 
                     combined = _build_combined_from_pred(
                         pred_full[k],
-                        evap_path=None if use_pred_evap else (evap_files[idx] if evap_files is not None else None),
+                        evap_path=None if use_pred_evap else _get_evap_path_for_press(press_path, evap_map),
                         static_arr=static_arr,
                     )
                     history.append(combined)
@@ -412,7 +490,8 @@ def main():
 
             for k in range(AFT_SEQ):
                 idx = t0 + PRE_SEQ + k
-                src_name = Path(press_files[idx]).name
+                press_path = press_files[idx]
+                src_name = Path(press_path).name
                 out_name = f"pred_{src_name}"
                 out_path = out_dir / out_name
                 write_pfb(

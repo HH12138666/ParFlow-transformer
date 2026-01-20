@@ -56,3 +56,37 @@ class Attention(nn.Module):
         out = self.to_out(out)
         return out
 
+
+class CrossAttention(nn.Module):
+    def __init__(self, dim, heads=8, dim_head=256, dropout=0.):
+        super().__init__()
+        inner_dim = dim_head * heads
+        project_out = not (heads == 1 and dim_head == dim)
+
+        self.heads = heads
+        self.scale = dim_head ** -0.5
+
+        self.to_q = nn.Linear(dim, inner_dim, bias=False)
+        self.to_k = nn.Linear(dim, inner_dim, bias=False)
+        self.to_v = nn.Linear(dim, inner_dim, bias=False)
+
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, dim),
+            nn.Dropout(dropout)
+        ) if project_out else nn.Identity()
+
+    def forward(self, q_in, kv_in):
+        b, nq, _, h = *q_in.shape, self.heads
+        nk = kv_in.shape[1]
+        q = self.to_q(q_in)
+        k = self.to_k(kv_in)
+        v = self.to_v(kv_in)
+        q = rearrange(q, 'b n (h d) -> b h n d', h=h)
+        k = rearrange(k, 'b n (h d) -> b h n d', h=h)
+        v = rearrange(v, 'b n (h d) -> b h n d', h=h)
+        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        attn = dots.softmax(dim=-1)
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h n d -> b n (h d)')
+        out = self.to_out(out)
+        return out

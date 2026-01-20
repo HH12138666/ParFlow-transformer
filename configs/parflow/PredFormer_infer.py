@@ -6,10 +6,16 @@ model_config = {
     'width': 252,
     'input_channels': 36,
     'dynamic_channels': 14,
-    'static_in_channels': 22, # 如果不适用cnn处理静态数据，则设为None
-    'static_out_channels': 10,    # 如果不适用cnn处理静态数据，则设为None
+    'static_in_channels': 22, 
+    'static_out_channels': 10,    # 如果不使用cnn处理静态数据，则设为None
     'in_channels': 24,
     'out_channels': 14,
+    
+    # attention type
+    'pre_attn_type': 'none',  # none or self or cross
+
+    # static kernel size
+    'static_kernel_size': 5,
     
     # space stride
     'space_h': 60,

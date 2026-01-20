@@ -6,7 +6,7 @@ cd "$REPO"
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
 # 选择使用的GPU
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 CURRENT_TIME=$(date +"%Y-%m-%d-%H-%M")
 EX_NAME="ParFlow_press/${CURRENT_TIME}_FACTS"
 

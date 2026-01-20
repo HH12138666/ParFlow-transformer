@@ -16,6 +16,7 @@ def load_data(dataname, batch_size, val_batch_size, num_workers, data_root, dist
         space_stride_w=kwargs.get('space_stride_w', None),
         out_channels=out_channels,
         static_data=kwargs.get('static_data', None),
+        align_by_hour_id=kwargs.get('align_by_hour_id', True),
     )
     if dataname == 'parflow':
         from .dataloader_parflow import load_data

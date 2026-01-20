@@ -12,4 +12,5 @@ debug_outliers/
 inference_data/
 inference_plot/
 stats.npz.baryes
-
+prev_result_analyze/
+inference_data_bar/
