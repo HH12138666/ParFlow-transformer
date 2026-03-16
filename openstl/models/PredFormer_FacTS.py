@@ -159,24 +159,20 @@ class PredFormer_Model(nn.Module):
             Rearrange('b t c (h p1) (w p2) -> b t (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size),
             nn.Linear(self.patch_dim, self.dim),
             )
-        self.pre_attn_type = model_config.get('pre_attn_type', 'none')
-        if self.pre_attn_type not in {'none', 'self', 'cross'}:
-            raise ValueError(f"Unknown pre_attn_type={self.pre_attn_type}")
-        self.pre_self_attn = None
+        self.attn_type = model_config.get('attn_type', model_config.get('pre_attn_type', 'none'))
+        if self.attn_type not in {'none', 'pre_cross', 'post_cross', 'film'}:
+            raise ValueError(f"Unknown attn_type={self.attn_type}")
         self.pre_cross_attn = None
         self.pre_cross_norm_q = None
         self.pre_cross_norm_kv = None
         self.to_patch_embedding_dyn = None
         self.to_patch_embedding_static = None
-        if self.pre_attn_type == 'self':
-            self.pre_self_attn = PreNorm(
-                self.dim,
-                Attention(self.dim, heads=self.heads, dim_head=self.dim_head, dropout=self.attn_dropout),
-            )
-        elif self.pre_attn_type == 'cross':
+        self.film_in_channels = None
+        self.film_mlp = None
+        if self.attn_type in {'pre_cross', 'post_cross'}:
             static_channels = self.static_out_channels if self.static_proj is not None else self.static_in_channels
             if static_channels is None:
-                raise ValueError("pre_attn_type='cross' requires static channels.")
+                raise ValueError(f"attn_type='{self.attn_type}' requires static channels.")
             dyn_patch_dim = self.dynamic_channels * self.patch_size ** 2
             sta_patch_dim = static_channels * self.patch_size ** 2
             self.to_patch_embedding_dyn = nn.Sequential(
@@ -191,6 +187,22 @@ class PredFormer_Model(nn.Module):
             self.pre_cross_norm_kv = nn.LayerNorm(self.dim)
             self.pre_cross_attn = CrossAttention(
                 self.dim, heads=self.heads, dim_head=self.dim_head, dropout=self.attn_dropout
+            )
+        elif self.attn_type == 'film':
+            if self.static_in_channels is None:
+                raise ValueError("attn_type='film' requires static channels.")
+            self.film_in_channels = (
+                self.static_out_channels if self.static_proj is not None else self.static_in_channels
+            )
+            dyn_patch_dim = self.dynamic_channels * self.patch_size ** 2
+            self.to_patch_embedding_dyn = nn.Sequential(
+                Rearrange('b t c (h p1) (w p2) -> b t (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size),
+                nn.Linear(dyn_patch_dim, self.dim),
+            )
+            self.film_mlp = nn.Sequential(
+                nn.Linear(self.film_in_channels, self.dim * 2),
+                nn.GELU(),
+                nn.Linear(self.dim * 2, self.dim * 2),
             )
         self.pos_embedding = nn.Parameter(sinusoidal_embedding(self.num_frames_in * self.num_patches, self.dim),
                                                requires_grad=False).view(1, self.num_frames_in, self.num_patches, self.dim)
@@ -212,9 +224,11 @@ class PredFormer_Model(nn.Module):
             raise ValueError(f"Expected input channels={self.input_channels}, got {C}")
         dyn = None
         static = None
+        static_raw = None
         if self.static_in_channels is not None:
             dyn = x[:, :, :self.dynamic_channels]
             static = x[:, :, self.dynamic_channels:self.dynamic_channels + self.static_in_channels]
+            static_raw = static
         if self.static_proj is not None:
             static = static.reshape(B * T, self.static_in_channels, H, W)
             static = self.static_proj(static)
@@ -224,9 +238,9 @@ class PredFormer_Model(nn.Module):
             raise ValueError(f"Expected projected channels={self.in_channels}, got {x.shape[2]}")
         
         pos = self.pos_embedding.to(x.device)
-        if self.pre_attn_type == 'cross':
+        if self.attn_type == 'pre_cross':
             if dyn is None or static is None:
-                raise ValueError("pre_attn_type='cross' requires static channels.")
+                raise ValueError("attn_type='pre_cross' requires static channels.")
             dyn_tok = self.to_patch_embedding_dyn(dyn)
             static_tok = self.to_patch_embedding_static(static)
             dyn_tok = dyn_tok + pos
@@ -240,13 +254,26 @@ class PredFormer_Model(nn.Module):
             )
             x = q.reshape(B, T, n, self.dim)
         else:
-            x = self.to_patch_embedding(x)
-            x = x + pos
-            b, t, n, _ = x.shape
-            if self.pre_attn_type == 'self':
-                x_flat = x.reshape(B * T, n, self.dim)
-                x_flat = x_flat + self.pre_self_attn(x_flat)
-                x = x_flat.reshape(B, T, n, self.dim)
+            if self.attn_type == 'film':
+                if static_raw is None:
+                    raise ValueError("attn_type='film' requires static channels.")
+                # Use dynamic only for transformer input
+                x = self.to_patch_embedding_dyn(dyn)
+                x = x + pos
+                b, t, n, _ = x.shape
+                # Global conditioning vector from static (use CNN output if enabled)
+                cond_src = static if self.static_proj is not None else static_raw
+                cond = cond_src.mean(dim=(1, 3, 4))  # (B, C_static)
+                gamma_beta = self.film_mlp(cond)  # (B, 2D)
+                gamma, beta = gamma_beta.chunk(2, dim=-1)
+                gamma = gamma.view(B, 1, 1, self.dim)
+                beta = beta.view(B, 1, 1, self.dim)
+                x = gamma * x + beta
+            else:
+                x = self.to_patch_embedding(x)
+                x = x + pos
+                b, t, n, _ = x.shape
+            # attn_type == 'none' or 'post_cross' falls through without extra attention
         
         # ts-t branch
         x_t = rearrange(x, 'b t n d -> b n t d')
@@ -258,6 +285,21 @@ class PredFormer_Model(nn.Module):
         x_ts = rearrange(x_ts, 'b n t d -> b t n d')
         x_ts = rearrange(x_ts, 'b t n d -> (b t) n d') 
         x_ts = self.space_transformer(x_ts)
+
+        if self.attn_type == 'post_cross':
+            if dyn is None or static is None:
+                raise ValueError("attn_type='post_cross' requires static channels.")
+            # Use transformer output as dynamic tokens (query)
+            dyn_tok = x_ts.reshape(B, T, n, self.dim)
+            static_tok = self.to_patch_embedding_static(static)
+            static_tok = static_tok + pos
+            q = dyn_tok.reshape(B * T, n, self.dim)
+            kv = static_tok.reshape(B * T, n, self.dim)
+            q = q + self.pre_cross_attn(
+                self.pre_cross_norm_q(q),
+                self.pre_cross_norm_kv(kv),
+            )
+            x_ts = q.reshape(B * T, n, self.dim)
             
         # MLP head        
         x = self.mlp_head(x_ts.reshape(-1, self.dim))

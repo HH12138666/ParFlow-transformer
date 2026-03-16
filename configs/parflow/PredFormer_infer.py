@@ -7,15 +7,15 @@ model_config = {
     'input_channels': 36,
     'dynamic_channels': 14,
     'static_in_channels': 22, 
-    'static_out_channels': 10,    # 如果不使用cnn处理静态数据，则设为None
-    'in_channels': 24,
+    'static_out_channels': 5,    # 如果不使用cnn处理静态数据，则设为None
+    'in_channels': 19,
     'out_channels': 14,
     
     # attention type
-    'pre_attn_type': 'none',  # none or self or cross
+    'attn_type': 'none',  # none or pre_cross or post_cross or film
 
     # static kernel size
-    'static_kernel_size': 5,
+    'static_kernel_size': 1,
     
     # space stride
     'space_h': 60,
@@ -44,4 +44,3 @@ model_config = {
     'depth': 4,
     'Ndepth': 6,
 }
-

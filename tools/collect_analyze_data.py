@@ -14,8 +14,8 @@ plt.rcParams['axes.unicode_minus'] = False
 # -------------------------------
 log_file_path = 'work_dirs/ParFlow_press'  
 # 请根据实际情况修改log_file_result和log_file_name
-log_file_result = '2026-01-05-19-42_FACTS'
-log_file_name = f'train_20260105_194237.log'
+log_file_result = '2026-03-04-21-24_FACTS'
+log_file_name = f'train_20260304_212438.log'
 
 
 log_file_path_final = os.path.join(log_file_path, log_file_result, log_file_name)
@@ -254,7 +254,7 @@ def plot_epoch_curves(
     将收集好的 epoch 指标直接画图。
     返回保存路径字典，便于后续打印。
     """
-    required_cols = {'Epoch', 'Train Loss', 'Validation Loss', 'RMSE'}
+    required_cols = {'Epoch', 'Train Loss', 'Validation Loss', 'RMSE', 'MAE'}
     missing = required_cols - set(df_epochs.columns)
     if missing:
         raise ValueError(f'缺少必要列，无法画图: {missing}')
@@ -277,6 +277,7 @@ def plot_epoch_curves(
     plt.tight_layout()
     loss_path = os.path.join(out_dir, base_name + '_loss_epoch.png')
     plt.savefig(loss_path, dpi=300)
+    plt.close()
 
     # RMSE 曲线
     plt.figure(figsize=(10, 5))
@@ -289,8 +290,22 @@ def plot_epoch_curves(
     plt.tight_layout()
     rmse_path = os.path.join(out_dir, base_name + '_rmse_epoch.png')
     plt.savefig(rmse_path, dpi=300)
+    plt.close()
 
-    return {'loss_png': loss_path, 'rmse_png': rmse_path}
+    # MAE 曲线
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_epochs['Epoch'], df_epochs['MAE'], label='MAE', color='seagreen', linewidth=2)
+    plt.xlabel('Epoch')
+    plt.ylabel('Press MAE (m)')
+    plt.title('MAE Over Epochs')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    mae_path = os.path.join(out_dir, base_name + '_mae_epoch.png')
+    plt.savefig(mae_path, dpi=300)
+    plt.close()
+
+    return {'loss_png': loss_path, 'rmse_png': rmse_path, 'mae_png': mae_path}
 
 # -------------------------------
 # 6. 主函数：整合所有信息并导出 Excel + 画图
@@ -348,6 +363,7 @@ def main():
     print("✅ 曲线已绘制完成：")
     print(f"   - Loss 曲线: {plot_paths['loss_png']}")
     print(f"   - RMSE 曲线: {plot_paths['rmse_png']}")
+    print(f"   - MAE 曲线: {plot_paths['mae_png']}")
 
 # -------------------------------
 # 7. 运行

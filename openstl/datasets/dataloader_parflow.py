@@ -22,16 +22,12 @@ EPS = 1e-6
 NORMALIZE = True
 NORMALIZE_TARGET = True
 STATS_PATH = './stats'   
-STATS_NAME = 'stats_press_evapotrans_perm_x_alpha_n_porosity.npz'    
+STATS_NAME = 'stats_press_evaptrans_perm_x_alpha_n_porosity.npz'    
 STATS_PATH = os.path.join(STATS_PATH, STATS_NAME)         
 #是否拼接 static 数据
 USE_STATIC = True
-# evaptrans 固定使用 6-9 层，路径固定为 data_root/evapotrans
+# evaptrans 固定使用 6-9 层，路径固定为 data_root/evaptrans
 EVAP_CHANNELS = [6, 7, 8, 9]
-
-#异常值修复相关设置
-ABS_OUTLIER_THRESHOLD = -10000.0   # 绝对阈值：低于该值直接视为异常并修复
-OUTLIER_STD_MULT = 5              # 动态阈值：偏离均值超过 k * std 判为异常（上下双向）
 
 #数据分割相关设置
 time_stride = 5    # 时间步长，用于数据分割
@@ -61,10 +57,6 @@ def _build_id_map(files, label):
         raise ValueError(f"No {label} files with valid hour ids found.")
     return items
 
-def _check_hour_continuity(ids, label):
-    for prev, cur in zip(ids, ids[1:]):
-        if cur != prev + 1:
-            raise ValueError(f"Non-contiguous {label} hours: {prev} -> {cur}")
 
 def _list_pfb_files(root) :
     files = sorted(glob.glob(os.path.join(root, '*.pfb')), key=_natural_key)
@@ -77,12 +69,12 @@ def _resolve_parflow_roots(data_root, use_static=USE_STATIC):
     """
     Allow passing a base directory that contains subfolders:
     - press
-    - evapotrans
+    - evaptrans
     - static
     """
     base = Path(data_root)
     press_root = str(base / "press")
-    evap_root = str(base / "evapotrans")
+    evap_root = str(base / "evaptrans")
     static_root = str(base / "static") if use_static else None
     return press_root, evap_root, static_root
 
@@ -110,39 +102,6 @@ def _filter_static_files(files, static_data):
         raise FileNotFoundError(f'No static .pfb files matched patterns: {patterns}')
     return matched
 
-# 异常值修复
-def _interpolate_outliers(arr, abs_threshold=ABS_OUTLIER_THRESHOLD, std_mult=OUTLIER_STD_MULT):
-    """
-    简单 + 动态异常值修复：
-    - 低于 abs_threshold 的位置视为异常；
-    - 偏离均值超过 std_mult * std（上下双向）的视为异常；
-    - 用对应通道的均值填充异常值。
-    """
-    if arr.ndim != 3:
-        raise ValueError(f"Expected 3D array for interpolation, got shape {arr.shape}.")
-
-    repaired = arr.astype(np.float32, copy=True)
-    c, h, w = repaired.shape
-    flat = repaired.reshape(c, -1)
-
-    # 先基于绝对阈值确定基础异常区域，并据此计算均值/标准差（忽略绝对异常）
-    abs_mask = flat < abs_threshold if abs_threshold is not None else np.zeros_like(flat, dtype=bool)
-    valid = np.ma.array(flat, mask=abs_mask)
-    channel_mean = valid.mean(axis=1, keepdims=True).filled(0.0)
-    channel_std = valid.std(axis=1, keepdims=True).filled(0.0)
-    channel_std = np.maximum(channel_std, EPS)
-
-    low = channel_mean - std_mult * channel_std
-    high = channel_mean + std_mult * channel_std
-
-    mask_dyn = (flat < low) | (flat > high)
-    mask = abs_mask | mask_dyn
-    if not mask.any():
-        return repaired
-
-    flat[mask] = np.broadcast_to(channel_mean, flat.shape)[mask]
-    return flat.reshape(c, h, w)
-
 # 根据空间尺寸和步长构建空间裁剪坐标列表
 def _build_space_coords(height, width, space_h, space_w, space_stride_h=None, space_stride_w=None):
     if space_h is None or space_w is None:
@@ -165,12 +124,10 @@ def _build_space_coords(height, width, space_h, space_w, space_stride_h=None, sp
         coords_w.append(width - space_w)
     return [(top, left) for top in coords_h for left in coords_w]
 
-# 读取单个压力场文件并修复异常值
+# 读取单个压力场文件
 def _read_press_frame(press_path) :
 
     arr = read_pfb(get_absolute_path(press_path)).astype(np.float32)  # (C,H,W)
-
-    arr = _interpolate_outliers(arr, abs_threshold=ABS_OUTLIER_THRESHOLD)
     if arr.ndim != 3:
         raise ValueError(f'Expected 3D array per .pfb, got shape {arr.shape} for {press_path}')
     return arr
@@ -223,7 +180,7 @@ def _read_combined_frame(press_path,evap_path = None,static_arr = None):
         combined = np.concatenate([combined, static_arr], axis=0)
     return combined
 
-#增强数据
+#增强数据,暂时用不到
 def augment_pair(X, Y,p_flip_h=0.5,p_flip_w=0.5,p_noise=0.2,noise_sigma=0.001):
     
     if torch.rand(1).item() < p_flip_h:
@@ -295,7 +252,6 @@ class ParFlowDataset(Dataset):
                 if extra:
                     raise ValueError(f"Evap hours not in press ids (first 5): {extra[:5]}")
                 self.evap_files = [evap_map[i] for i in press_ids]
-            _check_hour_continuity(press_ids, "press")
         elif self.evap_files is not None and len(self.evap_files) != len(self.files):
             raise ValueError(
                 f"press/evap file counts do not match: {len(self.files)} vs {len(self.evap_files)}"
@@ -345,11 +301,11 @@ class ParFlowDataset(Dataset):
         self.std_t  = torch.from_numpy(self.std ).view(1, self.C, 1, 1).float() if self.std  is not None else None
 
     def _build_time_indices(self, stride=time_stride):
-        n_train = int(self.num_frames * 0.75)
-        n_val   = int(self.num_frames * 0.1)
+        n_train = int(self.num_frames * 0.7)
+        n_val   = int(self.num_frames * 0.15)
         def build_range(s, e):
-            e = e - 1
-            max_start = e - self.total + 1
+            end = e - 1
+            max_start = end - self.total + 1
             if max_start < s:
                 return []
             return list(range(s, max_start + 1, stride))
@@ -364,7 +320,7 @@ class ParFlowDataset(Dataset):
         return len(self.sample_indices)
     
     
-    # 按时间窗口读取数据确保时间连续   
+     
     def _read_window(self, t0):
         T = self.total
         out = torch.empty((T, self.C, self.H, self.W), dtype=torch.float32)

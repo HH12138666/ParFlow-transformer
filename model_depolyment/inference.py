@@ -19,17 +19,15 @@ from parflow.tools.io import read_pfb, write_pfb
 # Fill these before running.
 PARFLOW_PATH = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press"
 # 选择的checkpoint名称
-CHECKPOINT_NAME = "2026-01-07-21-11_FACTS"
+CHECKPOINT_NAME = "2026-03-04-21-24_FACTS"
 CHECKPOINT_PATH = os.path.join(PARFLOW_PATH, CHECKPOINT_NAME, "checkpoint.pth")
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
-OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press_true_evap"
+OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press"
 # +perm_x_n_alpha_porosity
-RUN_PARAM = "press+evapotrans+perm_x_n_alpha_porosity_true_evap_cnn10_k5_in12_out12_rollout700"  # 
+RUN_PARAM = "press+evaptrans+perm_x_n_alpha_porosity_time5_train0.75_cnn5_k1_in12_out12_rollout700"  # 
 USE_STATIC = True
 #perm_x,alpha_z6-9,n_z6-9,porosity_z6-9
 STATIC_DATA = "perm_x,alpha_z6-9,n_z6-9,porosity_z6-9"  
-ABS_OUTLIER_THRESHOLD = -10000.0
-OUTLIER_STD_MULT = 5
 USE_PRED_EVAP = False  # use predicted evap instead of reading real evap files
 
 # Keep in sync with training preprocessing.
@@ -39,8 +37,8 @@ PRESS_CHANNELS = 10
 
 # Prediction range (hour id in file names, 1-based if files start at 00001).
 # Use strings like "00001" if you want to keep the visual format.
-START_HOUR = "07700"
-END_HOUR = "08760"  # empty means use last available hour
+START_HOUR = "20207000"
+END_HOUR = "20207711"  # empty means use last available hour
 
 DEVICE = "cuda"
 
@@ -59,7 +57,7 @@ SPACE_STRIDE_H = _model_cfg.get("space_stride_h", None)
 SPACE_STRIDE_W = _model_cfg.get("space_stride_w", None)
 
 # Stats for normalization.
-STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats/stats_press_evapotrans_perm_x_alpha_n_porosity.npz"
+STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats/stats_press_evaptrans_perm_x_alpha_n_porosity.npz"
 OUT_CHANNELS = int(_model_cfg["out_channels"])
 
 
@@ -87,7 +85,7 @@ def _list_pfb_files(root):
 def _resolve_parflow_roots(data_root, use_static=True):
     base = Path(data_root)
     press_root = str(base / "press")
-    evap_root = str(base / "evapotrans")
+    evap_root = str(base / "evaptrans")
     static_root = str(base / "static") if use_static else None
     return press_root, evap_root, static_root
 
@@ -142,26 +140,6 @@ def _read_evap_frame(evap_path):
         raise ValueError(f'Expected 3D evaptrans array, got shape {arr.shape} for {evap_path}')
     return arr[EVAP_CHANNELS, ...]
 
-
-def _interpolate_outliers(arr, abs_threshold=ABS_OUTLIER_THRESHOLD, std_mult=OUTLIER_STD_MULT):
-    if arr.ndim != 3:
-        raise ValueError(f"Expected 3D array for interpolation, got shape {arr.shape}.")
-    repaired = arr.astype(np.float32, copy=True)
-    c, h, w = repaired.shape
-    flat = repaired.reshape(c, -1)
-    abs_mask = flat < abs_threshold if abs_threshold is not None else np.zeros_like(flat, dtype=bool)
-    valid = np.ma.array(flat, mask=abs_mask)
-    channel_mean = valid.mean(axis=1, keepdims=True).filled(0.0)
-    channel_std = valid.std(axis=1, keepdims=True).filled(0.0)
-    channel_std = np.maximum(channel_std, EPS)
-    low = channel_mean - std_mult * channel_std
-    high = channel_mean + std_mult * channel_std
-    mask_dyn = (flat < low) | (flat > high)
-    mask = abs_mask | mask_dyn
-    if not mask.any():
-        return repaired
-    flat[mask] = np.broadcast_to(channel_mean, flat.shape)[mask]
-    return flat.reshape(c, h, w)
 
 
 def _build_space_coords(height, width, space_h, space_w, space_stride_h=None, space_stride_w=None):
@@ -228,13 +206,7 @@ def _parse_index(value, default=None):
 
 
 def _read_combined_frame_infer(press_path, evap_path=None, static_arr=None):
-    # Keep press outlier handling consistent with training (_read_press_frame).
     press = read_pfb(get_absolute_path(press_path)).astype(np.float32)
-    press = _interpolate_outliers(
-        press,
-        abs_threshold=ABS_OUTLIER_THRESHOLD,
-        std_mult=OUTLIER_STD_MULT,
-    )
     if press.shape[0] > PRESS_CHANNELS:
         press = press[:PRESS_CHANNELS]
     if evap_path is None:

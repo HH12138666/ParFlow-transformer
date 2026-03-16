@@ -1,23 +1,9 @@
 import json
 from torch import optim
 
-from timm.optim.adafactor import Adafactor
-from timm.optim.adahessian import Adahessian
-from timm.optim.adamp import AdamP
-from timm.optim.lookahead import Lookahead
-from timm.optim.nadam import Nadam
-from timm.optim.nvnovograd import NvNovoGrad
-from timm.optim.radam import RAdam
-from timm.optim.rmsprop_tf import RMSpropTF
-from timm.optim.sgdp import SGDP
-
 from timm.scheduler.cosine_lr import CosineLRScheduler
-from timm.scheduler.multistep_lr import MultiStepLRScheduler
-from timm.scheduler.step_lr import StepLRScheduler
-from timm.scheduler.tanh_lr import TanhLRScheduler
 
 from .optim_constant import optim_parameters
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 
@@ -87,57 +73,14 @@ def get_optim_scheduler(args, epoch, model, steps_per_epoch):
 
     opt_split = opt_lower.split('_')
     opt_lower = opt_split[-1]
-    if opt_lower == 'sgd' or opt_lower == 'nesterov':
-        opt_args.pop('eps', None)
-        optimizer = optim.SGD(parameters, momentum=args.momentum, nesterov=True, **opt_args)
-    elif opt_lower == 'momentum':
-        opt_args.pop('eps', None)
-        optimizer = optim.SGD(parameters, momentum=args.momentum, nesterov=False, **opt_args)
-    elif opt_lower == 'adam':
-        optimizer = optim.Adam(parameters, **opt_args)
-    elif opt_lower == 'adamw':
-        optimizer = optim.AdamW(parameters, **opt_args)
-    elif opt_lower == 'nadam':
-        optimizer = Nadam(parameters, **opt_args)
-    elif opt_lower == 'radam':
-        optimizer = RAdam(parameters, **opt_args)
-    elif opt_lower == 'adamp':
-        optimizer = AdamP(parameters, wd_ratio=0.01, nesterov=True, **opt_args)
-    elif opt_lower == 'sgdp':
-        optimizer = SGDP(parameters, momentum=args.momentum, nesterov=True, **opt_args)
-    elif opt_lower == 'adadelta':
-        optimizer = optim.Adadelta(parameters, **opt_args)
-    elif opt_lower == 'adafactor':
-        if not args.lr:
-            opt_args['lr'] = None
-        optimizer = Adafactor(parameters, **opt_args)
-    elif opt_lower == 'adahessian':
-        optimizer = Adahessian(parameters, **opt_args)
-    elif opt_lower == 'rmsprop':
-        optimizer = optim.RMSprop(parameters, alpha=0.9, momentum=args.momentum, **opt_args)
-    elif opt_lower == 'rmsproptf':
-        optimizer = RMSpropTF(parameters, alpha=0.9, momentum=args.momentum, **opt_args)
-    elif opt_lower == 'nvnovograd':
-        optimizer = NvNovoGrad(parameters, **opt_args)
-    else:
-        assert False and "Invalid optimizer"
-
-    if len(opt_split) > 1:
-        if opt_split[0] == 'lookahead':
-            optimizer = Lookahead(optimizer)
+    if opt_lower != 'adamw':
+        raise ValueError(f"Only adamw is supported, got opt={args.opt}")
+    optimizer = optim.AdamW(parameters, **opt_args)
 
     sched_lower = args.sched.lower()
     total_steps = epoch * steps_per_epoch
     by_epoch = True
-    if sched_lower == 'onecycle':
-        lr_scheduler = optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=args.lr,
-            # total_steps=total_steps,
-            total_steps=total_steps,
-            final_div_factor=getattr(args, 'final_div_factor', 1e4))
-        by_epoch = False
-    elif sched_lower == 'cosine':
+    if sched_lower == 'cosine':
         lr_scheduler = CosineLRScheduler(
             optimizer,
             t_initial=epoch,
@@ -146,39 +89,7 @@ def get_optim_scheduler(args, epoch, model, steps_per_epoch):
             warmup_t=args.warmup_epoch,
             t_in_epochs=True,  # update lr by_epoch
             k_decay=getattr(args, 'lr_k_decay', 1.0))
-    elif sched_lower == 'tanh':
-        lr_scheduler = TanhLRScheduler(
-            optimizer,
-            t_initial=epoch,
-            lr_min=args.min_lr,
-            warmup_lr_init=args.warmup_lr,
-            warmup_t=args.warmup_epoch,
-            t_in_epochs=True)  # update lr by_epoch
-    elif sched_lower == 'step':
-        lr_scheduler = StepLRScheduler(
-            optimizer,
-            decay_t=args.decay_epoch,
-            decay_rate=args.decay_rate,
-            warmup_lr_init=args.warmup_lr,
-            warmup_t=args.warmup_epoch)
-    elif sched_lower == 'multistep':
-        lr_scheduler = MultiStepLRScheduler(
-            optimizer,
-            decay_t=args.multi_decay_epoch,
-            decay_rate=args.decay_rate,
-            warmup_lr_init=args.warmup_lr,
-            warmup_t=args.warmup_epoch)
-    elif sched_lower == 'reducelr':
-        # Add ReduceLROnPlateau scheduler
-        lr_scheduler = ReduceLROnPlateau(
-            optimizer,
-            mode='min',  # or 'max', depending on your use case
-            factor=args.decay_rate,  # how much to reduce the LR by
-            patience=args.patience,  # how many epochs to wait before reducing
-            verbose=True,  # prints a message each time LR is reduced
-            min_lr=args.min_lr,  # lower bound on the learning rate
-        )
     else:
-        assert False and "Invalid scheduler"
+        raise ValueError(f"Only cosine scheduler is supported, got sched={args.sched}")
 
     return optimizer, lr_scheduler, by_epoch

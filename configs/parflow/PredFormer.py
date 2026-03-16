@@ -7,21 +7,21 @@ model_config = {
     'input_channels': 36,   # 原始输入：压力 10 层 + evaptrans 4 层 + static 22 通道
     'dynamic_channels': 14, # 压力 10 层 + evaptrans 4 层
     'static_in_channels': 22, # 静态输入通道数
-    'static_out_channels': 10, # 静态压缩到 10 层，如果不使用cnn处理静态数据，则设为None
-    'in_channels': 24,   # 动态 14 + 静态压缩 10
+    'static_out_channels': 5, # 静态压缩到 n 层，如果不使用cnn处理静态数据，则设为None
+    'in_channels': 19,   # 动态 14 + 静态压缩 
     'out_channels': 14,  # 输出：压力 10 层 ，为了让batch_y能有真实的evap数据，方便在自回归的时候可以用到真实的evap数据进行预测
     
     # attention type
-    'pre_attn_type': 'none',  # none or self or cross
+    'attn_type': 'none',  # none or pre_cross or post_cross or film
     
     # cnn卷积核大小
-    'static_kernel_size':5,
+    'static_kernel_size':1,
     
     # space stride
-    'space_h': 60,
-    'space_w': 84,
-    'space_stride_h': 30,
-    'space_stride_w': 42,
+    'space_h': 146,
+    'space_w': 252,
+    'space_stride_h': None, # None表示不裁剪，直接用全图，整数表示裁剪成patch的大小
+    'space_stride_w': None, # None表示不裁剪，直接用全图，整数表示裁剪成patch的大小
     'val_save_stride': 0,# 验证集保存步长，0表示不保存
     
     # video length in and out

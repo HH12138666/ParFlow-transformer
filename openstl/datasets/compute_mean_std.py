@@ -10,7 +10,6 @@ from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb
 import os
 from openstl.datasets.dataloader_parflow import (
-    _interpolate_outliers,
     _list_pfb_files,
     _read_evap_frame,
     _read_static_stack,
@@ -18,10 +17,11 @@ from openstl.datasets.dataloader_parflow import (
 )
 
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
-STATS_OUT = "/home/huanghui/data/ParFlow-transformer/stats"
+STATS_OUT = "/home/huanghui/data/ParFlow-transformer/stats2"  # 输出目录
 # perm_x_alpha_n_porosity
-STATS_NAME = "stats_press_evapotrans_alpha_n_porosity"
+STATS_NAME = "stats_press_evaptrans_perm_x_alpha_n_porosity"
 STATS_OUT = os.path.join(STATS_OUT, f"{STATS_NAME}.npz")
+os.makedirs(os.path.dirname(STATS_OUT), exist_ok=True)
 SPATIAL_STRIDE = 1
 TIME_STRIDE = 1
 MAX_FILES = 0
@@ -30,21 +30,10 @@ EVAP_ROOT = None
 
 STATIC_ROOT = None
 # perm_x,alpha,n,porosity
-STATIC_DATA = "alpha,n,porosity"  # 逗号分隔关键词（大小写不敏感），为 None 时使用全部静态数据
-# Outlier handling parameters for pressure data
-APPLY_PRESS_OUTLIER_FIX = True
-PRESS_ABS_OUTLIER_THRESHOLD = -10000.0
-PRESS_OUTLIER_STD_MULT = 5.0
-
+STATIC_DATA = "perm_x,alpha,n,porosity"  # 逗号分隔关键词（大小写不敏感），为 None 时使用全部静态数据
 
 def _read_press_frame_for_stats(press_path):
     arr = read_pfb(get_absolute_path(press_path)).astype(np.float32)
-    if APPLY_PRESS_OUTLIER_FIX:
-        arr = _interpolate_outliers(
-            arr,
-            abs_threshold=PRESS_ABS_OUTLIER_THRESHOLD,
-            std_mult=PRESS_OUTLIER_STD_MULT,
-        )
     if arr.ndim != 3:
         raise ValueError(f"Expected 3D array per .pfb, got shape {arr.shape} for {press_path}")
     return arr
