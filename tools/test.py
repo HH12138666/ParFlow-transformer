@@ -39,9 +39,6 @@ if __name__ == '__main__':
     exp = BaseExperiment(args)
     rank, _ = get_dist_info()
 
-    if config['inference'] and not config['test']:
-        mse = exp.inference()
-    else:
-        mse = exp.test()
+    mse = exp.test()
     if rank == 0 and has_nni and mse is not None:
         nni.report_final_result(mse)

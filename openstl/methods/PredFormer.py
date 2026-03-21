@@ -86,7 +86,7 @@ class PredFormer(Base_method):
             pred_y = torch.cat(pred_y, dim=1)
         return pred_y
     
-    def train_one_epoch(self, runner, train_loader, epoch, num_updates, eta=None, **kwargs):
+    def train_one_epoch(self, runner, train_loader, epoch, num_updates, **kwargs):
         """Train the model with train_loader."""
         data_time_m = AverageMeter()
         losses_m = AverageMeter()
@@ -103,19 +103,20 @@ class PredFormer(Base_method):
 
             if not self.args.use_prefetcher:
                 batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
-            runner.call_hook('before_train_iter')
 
             with self.amp_autocast():
                 pred_y = self._predict(batch_x, batch_y=batch_y)
+                pred_y_loss = self._crop_to_valid_spatial(pred_y)
+                batch_y_loss = self._crop_to_valid_spatial(batch_y)
                 loss_channels = getattr(self.args, "loss_channels", 10)
-                if pred_y.shape[2] < loss_channels or batch_y.shape[2] < loss_channels:
+                if pred_y_loss.shape[2] < loss_channels or batch_y_loss.shape[2] < loss_channels:
                     raise ValueError(
                         f"Loss expects at least {loss_channels} channels, got "
-                        f"{pred_y.shape[2]} (pred) and {batch_y.shape[2]} (true)."
+                        f"{pred_y_loss.shape[2]} (pred) and {batch_y_loss.shape[2]} (true)."
                     )
                 loss = self.criterion(
-                    pred_y[:, :, :loss_channels, ...],
-                    batch_y[:, :, :loss_channels, ...],
+                    pred_y_loss[:, :, :loss_channels, ...],
+                    batch_y_loss[:, :, :loss_channels, ...],
                 )
 
             if not self.dist:
@@ -142,7 +143,6 @@ class PredFormer(Base_method):
 
             if not self.by_epoch:
                 self.scheduler.step()
-            runner.call_hook('after_train_iter')
             runner._iter += 1
 
             if self.rank == 0:
@@ -158,4 +158,4 @@ class PredFormer(Base_method):
 
         
 
-        return num_updates, losses_m, eta
+        return num_updates, losses_m

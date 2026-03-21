@@ -8,7 +8,6 @@ if REPO_ROOT not in sys.path:
 
 from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb
-import os
 from openstl.datasets.dataloader_parflow import (
     _list_pfb_files,
     _read_evap_frame,
@@ -17,9 +16,9 @@ from openstl.datasets.dataloader_parflow import (
 )
 
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
-STATS_OUT = "/home/huanghui/data/ParFlow-transformer/stats2"  # 输出目录
+STATS_OUT = "/home/huanghui/data/ParFlow-transformer/stats"  # 输出目录
 # perm_x_alpha_n_porosity
-STATS_NAME = "stats_press_evaptrans_perm_x_alpha_n_porosity"
+STATS_NAME = "stats_wtd"
 STATS_OUT = os.path.join(STATS_OUT, f"{STATS_NAME}.npz")
 os.makedirs(os.path.dirname(STATS_OUT), exist_ok=True)
 SPATIAL_STRIDE = 1
@@ -27,6 +26,9 @@ TIME_STRIDE = 1
 MAX_FILES = 0
 PRESS_ROOT = None
 EVAP_ROOT = None
+MAIN_VAR = "wtd"
+USE_EVAP = False
+USE_STATIC_INPUT = False
 
 STATIC_ROOT = None
 # perm_x,alpha,n,porosity
@@ -137,81 +139,31 @@ def compute_mean_std(files,
     return mean, std
 
 
-def compute_press_evap_mean_std(press_files,
-                                evap_root,
-                                spatial_stride=1,
-                                time_stride=1,
-                                max_files=None):
-    sel_files = press_files[::max(1, int(time_stride))]
-    if max_files is not None:
-        sel_files = sel_files[:int(max_files)]
-    if not sel_files:
-        raise ValueError("press_files is empty")
-    evap_files = _list_pfb_files(evap_root)
-    evap_sel = evap_files[::max(1, int(time_stride))]
-    if max_files is not None:
-        evap_sel = evap_sel[:int(max_files)]
-    if len(evap_sel) != len(sel_files):
-        raise ValueError("press/evap file counts do not match after stride")
-
-    p0 = _read_press_frame_for_stats(sel_files[0])
-    e0 = _read_evap_frame(evap_sel[0])
-
-    def _init_stats(C):
-        return (
-            np.zeros(C, dtype=np.float64),
-            np.zeros(C, dtype=np.float64),
-            np.zeros(C, dtype=np.float64),
-        )
-
-    p_sum, p_sumsq, p_cnt = _init_stats(p0.shape[0])
-    e_sum, e_sumsq, e_cnt = _init_stats(e0.shape[0])
-
-    def _update(arr, sum_, sumsq_, cnt_):
-        if spatial_stride > 1:
-            arr = arr[:, ::spatial_stride, ::spatial_stride]
-        sum_ += arr.sum(axis=(1, 2))
-        sumsq_ += np.square(arr).sum(axis=(1, 2))
-        cnt_ += arr.shape[1] * arr.shape[2]
-        return sum_, sumsq_, cnt_
-
-    for i, f in enumerate(sel_files):
-        p = _read_press_frame_for_stats(f)
-        e = _read_evap_frame(evap_sel[i])
-        if p.shape[1:] != e.shape[1:]:
-            raise ValueError(
-                f"Spatial shape mismatch between press and evap: {p.shape} vs {e.shape} for {f}"
-            )
-        p_sum, p_sumsq, p_cnt = _update(p, p_sum, p_sumsq, p_cnt)
-        e_sum, e_sumsq, e_cnt = _update(e, e_sum, e_sumsq, e_cnt)
-
-    def _finish(sum_, sumsq_, cnt_):
-        mean = sum_ / np.maximum(cnt_, 1.0)
-        var = sumsq_ / np.maximum(cnt_, 1.0) - np.square(mean)
-        std = np.sqrt(np.maximum(var, 0.0))
-        return mean.astype(np.float32), std.astype(np.float32)
-
-    press_mean, press_std = _finish(p_sum, p_sumsq, p_cnt)
-    evap_mean, evap_std = _finish(e_sum, e_sumsq, e_cnt)
-    return press_mean, press_std, evap_mean, evap_std
-
-
 def main():
-    press_root, evap_root, static_root = _resolve_parflow_roots(DATA_ROOT)
+    press_root, evap_root, static_root = _resolve_parflow_roots(
+        DATA_ROOT,
+        var_name=MAIN_VAR,
+        use_evap=USE_EVAP,
+        use_static=USE_STATIC_INPUT,
+    )
     if PRESS_ROOT is not None:
         press_root = PRESS_ROOT
     if EVAP_ROOT is not None:
         evap_root = EVAP_ROOT
+    elif not USE_EVAP:
+        evap_root = None
     if STATIC_ROOT is not None:
         static_root = STATIC_ROOT
-    if STATIC_DATA is not None and static_root is None:
+    elif not USE_STATIC_INPUT:
+        static_root = None
+    if USE_STATIC_INPUT and STATIC_DATA is not None and static_root is None:
         raise ValueError("STATIC_DATA is set but static_root is None")
 
     press_files = _list_pfb_files(press_root)
     evap_files = _list_pfb_files(evap_root) if evap_root is not None else None
     static_arr = (
         _read_static_stack(static_root, static_data=STATIC_DATA)
-        if static_root is not None
+        if (USE_STATIC_INPUT and static_root is not None)
         else None
     )
     max_files = MAX_FILES if MAX_FILES > 0 else None
@@ -224,9 +176,11 @@ def main():
         evap_files=evap_files,
         static_arr=static_arr,
     )
+    os.makedirs(os.path.dirname(STATS_OUT), exist_ok=True)
     np.savez(STATS_OUT, mean=mean, std=std)
     used = len(press_files) if max_files is None else min(len(press_files), max_files)
     print(f"Used {used} files")
+    print(f"Main variable: {MAIN_VAR}")
     print(f"Stats saved to {STATS_OUT}; mean shape={mean.shape}, std shape={std.shape}")
 
 

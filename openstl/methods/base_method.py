@@ -89,6 +89,29 @@ class Base_method(object):
         """
         raise NotImplementedError
 
+    def _get_valid_spatial_size(self):
+        target_h = getattr(self.args, 'space_h', None)
+        target_w = getattr(self.args, 'space_w', None)
+        if target_h is None or target_w is None:
+            target_h = getattr(self.args, 'height', None)
+            target_w = getattr(self.args, 'width', None)
+        return target_h, target_w
+
+    def _crop_to_valid_spatial(self, tensor):
+        if tensor is None or tensor.ndim < 2:
+            return tensor
+        target_h, target_w = self._get_valid_spatial_size()
+        if target_h is None or target_w is None:
+            return tensor
+        h, w = tensor.shape[-2], tensor.shape[-1]
+        if h == target_h and w == target_w:
+            return tensor
+        if h < target_h or w < target_w:
+            raise ValueError(
+                f"Cannot crop tensor from spatial size {(h, w)} to larger target {(target_h, target_w)}."
+            )
+        return tensor[..., :target_h, :target_w]
+
     def _dist_forward_collect(self, data_loader, length=None, gather_data=False):
         """Forward and collect predictios in a distributed manner.
 
@@ -113,23 +136,26 @@ class Base_method(object):
             with torch.no_grad():
                 batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
                 pred_y = self._predict(batch_x, batch_y)
+                batch_x_eval = self._crop_to_valid_spatial(batch_x)
+                batch_y_eval = self._crop_to_valid_spatial(batch_y)
+                pred_y_eval = self._crop_to_valid_spatial(pred_y)
 
             loss_channels = getattr(self.args, "loss_channels", 10)
-            if pred_y.shape[2] < loss_channels or batch_y.shape[2] < loss_channels:
+            if pred_y_eval.shape[2] < loss_channels or batch_y_eval.shape[2] < loss_channels:
                 raise ValueError(
                     f"Loss expects at least {loss_channels} channels, got "
-                    f"{pred_y.shape[2]} (pred) and {batch_y.shape[2]} (true)."
+                    f"{pred_y_eval.shape[2]} (pred) and {batch_y_eval.shape[2]} (true)."
                 )
             if gather_data:  # return raw datas
                 loss_value = self.criterion(
-                    pred_y[:, :, :loss_channels, ...],
-                    batch_y[:, :, :loss_channels, ...],
+                    pred_y_eval[:, :, :loss_channels, ...],
+                    batch_y_eval[:, :, :loss_channels, ...],
                 ).detach().cpu().numpy().reshape(1)
                 results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
-                                        [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy(), loss_value])))
+                                        [batch_x_eval.cpu().numpy(), pred_y_eval.cpu().numpy(), batch_y_eval.cpu().numpy(), loss_value])))
             else:  # return metrics
-                pred_eval = pred_y.cpu().numpy()
-                true_eval = batch_y.cpu().numpy()
+                pred_eval = pred_y_eval.cpu().numpy()
+                true_eval = batch_y_eval.cpu().numpy()
                 save_channels = getattr(self.args, "save_channels", None)
                 if save_channels is not None:
                     if pred_eval.shape[2] < save_channels or true_eval.shape[2] < save_channels:
@@ -143,8 +169,8 @@ class Base_method(object):
                                      data_loader.dataset.mean, data_loader.dataset.std,
                                      metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
                 eval_res['loss'] = self.criterion(
-                    pred_y[:, :, :loss_channels, ...],
-                    batch_y[:, :, :loss_channels, ...],
+                    pred_y_eval[:, :, :loss_channels, ...],
+                    batch_y_eval[:, :, :loss_channels, ...],
                 ).cpu().numpy()
                 for k in eval_res.keys():
                     eval_res[k] = eval_res[k].reshape(1)
@@ -187,23 +213,26 @@ class Base_method(object):
             with torch.no_grad():
                 batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
                 pred_y = self._predict(batch_x, batch_y)
+                batch_x_eval = self._crop_to_valid_spatial(batch_x)
+                batch_y_eval = self._crop_to_valid_spatial(batch_y)
+                pred_y_eval = self._crop_to_valid_spatial(pred_y)
 
             loss_channels = getattr(self.args, "loss_channels", 10)
-            if pred_y.shape[2] < loss_channels or batch_y.shape[2] < loss_channels:
+            if pred_y_eval.shape[2] < loss_channels or batch_y_eval.shape[2] < loss_channels:
                 raise ValueError(
                     f"Loss expects at least {loss_channels} channels, got "
-                    f"{pred_y.shape[2]} (pred) and {batch_y.shape[2]} (true)."
+                    f"{pred_y_eval.shape[2]} (pred) and {batch_y_eval.shape[2]} (true)."
                 )
             if gather_data:  # return raw datas
                 loss_value = self.criterion(
-                    pred_y[:, :, :loss_channels, ...],
-                    batch_y[:, :, :loss_channels, ...],
+                    pred_y_eval[:, :, :loss_channels, ...],
+                    batch_y_eval[:, :, :loss_channels, ...],
                 ).detach().cpu().numpy().reshape(1)
                 results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
-                                        [batch_x.cpu().numpy(), pred_y.cpu().numpy(), batch_y.cpu().numpy(), loss_value])))
+                                        [batch_x_eval.cpu().numpy(), pred_y_eval.cpu().numpy(), batch_y_eval.cpu().numpy(), loss_value])))
             else:  # evaluation-only path when we do not need to store raw tensors
-                pred_eval = pred_y.cpu().numpy()
-                true_eval = batch_y.cpu().numpy()
+                pred_eval = pred_y_eval.cpu().numpy()
+                true_eval = batch_y_eval.cpu().numpy()
                 save_channels = getattr(self.args, "save_channels", None)
                 if save_channels is not None:
                     if pred_eval.shape[2] < save_channels or true_eval.shape[2] < save_channels:
@@ -217,8 +246,8 @@ class Base_method(object):
                                      data_loader.dataset.mean, data_loader.dataset.std,
                                      metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
                 eval_res['loss'] = self.criterion(
-                    pred_y[:, :, :loss_channels, ...],
-                    batch_y[:, :, :loss_channels, ...],
+                    pred_y_eval[:, :, :loss_channels, ...],
+                    batch_y_eval[:, :, :loss_channels, ...],
                 ).cpu().numpy()
                 for k in eval_res.keys():
                     eval_res[k] = eval_res[k].reshape(1)

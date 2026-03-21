@@ -80,11 +80,27 @@ def create_parser():
     parser.add_argument('--space_stride_h', default=None, type=int, help='Vertical stride for ParFlow tiling')
     parser.add_argument('--space_stride_w', default=None, type=int, help='Horizontal stride for ParFlow tiling')
     parser.add_argument('--val_save_stride', default=None, type=int,
-                        help='Subsample stride for saving merged validation samples (saving every N samples)')   
+                        help='Subsample stride for saving merged validation samples (saving every N samples)')
+    parser.add_argument('--pad_to_patch', action='store_true', default=False,
+                        help='Pad full-frame inputs to the next multiple of patch_size before model forward')
+    parser.add_argument('--split_mode', default='ratio', type=str,
+                        help="Data split mode: 'ratio' or 'year'")
+    parser.add_argument('--train_years', type=parse_list, default=None,
+                        help='Training years, e.g. [2019]')
+    parser.add_argument('--holdout_years', type=parse_list, default=None,
+                        help='Holdout years split into val/test, e.g. [2020]')
+    parser.add_argument('--val_ratio_in_holdout', default=0.25, type=float,
+                        help='Validation fraction inside each holdout year')
+    parser.add_argument('--var_name', default='press', type=str,
+                        help='Primary dynamic variable folder name under data_root (e.g., press or wtd)')
+    parser.add_argument('--use_evap', default=True, type=bool,
+                        help='Whether to read and concatenate evaptrans channels')
+    parser.add_argument('--use_static_input', default=True, type=bool,
+                        help='Whether to read and concatenate static channels')
 
     # method parameters
     parser.add_argument('--method', '-m', default='predformer', type=str,
-                        choices=['predformer'],
+                        choices=['predformer', 'cnn', 'rnn', 'lstm', 'convlstm'],
                         help='Name of video prediction method to train')
     parser.add_argument('--config_file', '-c', default='configs/parflow/PredFormer.py', type=str,
                         help='Path to the default config file')
@@ -204,7 +220,15 @@ def default_parser():
         'space_w': None,
         'space_stride_h': None,
         'space_stride_w': None,
-        'val_save_stride': None,  
+        'val_save_stride': None,
+        'pad_to_patch': False,
+        'split_mode': 'ratio',
+        'train_years': None,
+        'holdout_years': None,
+        'val_ratio_in_holdout': 0.25,
+        'var_name': 'press',
+        'use_evap': True,
+        'use_static_input': True,
              
         # method parameters
         'method': 'predformer',

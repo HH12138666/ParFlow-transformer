@@ -4,12 +4,11 @@ import time
 import logging
 import json
 import numpy as np
-from typing import Dict, List
 from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 import torch
 import torch.distributed as dist
-from openstl.core import Hook, metric, Recorder, get_priority, hook_maps
+from openstl.core import metric, Recorder
 from openstl.methods import method_maps
 from openstl.utils import (set_seed, print_log, output_namespace, check_dir, collect_env,
                            init_dist, init_random_seed,
@@ -37,7 +36,6 @@ class BaseExperiment(object):
         self._inner_iter = 0
         self._max_epochs = self.config['epoch']
         self._max_iters = None
-        self._hooks: List[Hook] = []
         self._rank = 0
         self._world_size = 1
         self._dist = self.args.dist
@@ -129,14 +127,11 @@ class BaseExperiment(object):
         self._get_data(dataloaders)
         # build the method
         self._build_method()
-        # build hooks
-        self._build_hook()
         # resume traing
         if self.args.auto_resume:
             self.args.resume_from = osp.join(self.checkpoints_path, 'latest.pth')
         if self.args.resume_from is not None:
             self._load(name=self.args.resume_from)
-        self.call_hook('before_run')
 
     def _build_method(self):
         self.steps_per_epoch = len(self.train_loader)
@@ -148,50 +143,6 @@ class BaseExperiment(object):
             if self.args.torchscript:
                 self.method.model = torch.jit.script(self.method.model)
             self.method._init_distributed()
-
-    def _build_hook(self):
-        for k in self.args.__dict__:
-            if k.lower().endswith('hook'):
-                hook_cfg = self.args.__dict__[k].copy()
-                priority = get_priority(hook_cfg.pop('priority', 'NORMAL'))
-                hook = hook_maps[k.lower()](**hook_cfg)
-                if hasattr(hook, 'priority'):
-                    raise ValueError('"priority" is a reserved attribute for hooks')
-                hook.priority = priority  # type: ignore
-                # insert the hook to a sorted list
-                inserted = False
-                for i in range(len(self._hooks) - 1, -1, -1):
-                    if priority >= self._hooks[i].priority:  # type: ignore
-                        self._hooks.insert(i + 1, hook)
-                        inserted = True
-                        break
-                if not inserted:
-                    self._hooks.insert(0, hook)
-
-    def call_hook(self, fn_name: str) -> None:
-        """Run hooks by the registered names"""
-        for hook in self._hooks:
-            getattr(hook, fn_name)(self)
-
-    def _get_hook_info(self):
-        """Get hook information in each stage"""
-        stage_hook_map: Dict[str, list] = {stage: [] for stage in Hook.stages}
-        for hook in self._hooks:
-            priority = hook.priority  # type: ignore
-            classname = hook.__class__.__name__
-            hook_info = f'({priority:<12}) {classname:<35}'
-            for trigger_stage in hook.get_triggered_stages():
-                stage_hook_map[trigger_stage].append(hook_info)
-
-        stage_hook_infos = []
-        for stage in Hook.stages:
-            hook_infos = stage_hook_map[stage]
-            if len(hook_infos) > 0:
-                info = f'{stage}:\n'
-                info += '\n'.join(hook_infos)
-                info += '\n -------------------- '
-                stage_hook_infos.append(info)
-        return '\n'.join(stage_hook_infos)
 
     def _get_data(self, dataloaders=None):
         """Prepare datasets and dataloaders"""
@@ -240,6 +191,53 @@ class BaseExperiment(object):
         else:
             self.method.model.load_state_dict(state_dict)
 
+    def _load_best_checkpoint(self):
+        best_model_path = osp.join(self.path, 'checkpoint.pth')
+        self._load_from_state_dict(torch.load(best_model_path))
+
+    def _slice_eval_channels(self, preds, trues, save_channels=None):
+        if save_channels is None:
+            return preds, trues
+        if preds.shape[2] < save_channels or trues.shape[2] < save_channels:
+            raise ValueError(
+                f"Metrics expect at least {save_channels} channels, got "
+                f"{preds.shape[2]} (pred) and {trues.shape[2]} (true)."
+            )
+        return preds[:, :, :save_channels, ...], trues[:, :, :save_channels, ...]
+
+    def _compute_eval_results(self, results, data_loader, save_channels=None):
+        metric_list, spatial_norm, channel_names = self.args.metrics, True, None
+        preds_eval, trues_eval = self._slice_eval_channels(
+            results['preds'], results['trues'], save_channels=save_channels
+        )
+        eval_res, eval_log = metric(
+            preds_eval,
+            trues_eval,
+            data_loader.dataset.mean,
+            data_loader.dataset.std,
+            metrics=metric_list,
+            channel_names=channel_names,
+            spatial_norm=spatial_norm
+        )
+        results['metrics'] = np.array([eval_res['mae'], eval_res['mse'], eval_res['rmse'], eval_res['mape']])
+        return eval_res, eval_log
+
+    def _save_results_arrays(self, results, folder_path, np_data_list,
+                             save_channels=10, save_stride=None, epoch_tag=None):
+        check_dir(folder_path)
+        if save_stride is not None:
+            save_stride = max(1, int(save_stride))
+        save_indices = slice(None, None, save_stride) if save_stride and save_stride > 1 else None
+        for np_data in np_data_list:
+            data_to_save = results[np_data]
+            if np_data in {'inputs', 'trues', 'preds'}:
+                if save_indices is not None:
+                    data_to_save = data_to_save[save_indices]
+                if data_to_save.ndim >= 3:
+                    data_to_save = data_to_save[:, :, :save_channels, ...]
+            filename = f'{np_data}_{epoch_tag}.npy' if epoch_tag else f'{np_data}.npy'
+            np.save(osp.join(folder_path, filename), data_to_save)
+
 
 
     def display_method_info(self):
@@ -256,8 +254,11 @@ class BaseExperiment(object):
         use_crop = crop_h is not None and crop_w is not None
         dummy_h = crop_h if use_crop else H
         dummy_w = crop_w if use_crop else W
+        model_ref = self.method.model.module if hasattr(self.method.model, 'module') else self.method.model
+        dummy_h = getattr(model_ref, 'image_height', dummy_h)
+        dummy_w = getattr(model_ref, 'image_width', dummy_w)
 
-        if self.args.method in ['predformer']:
+        if self.args.method in ['predformer', 'cnn', 'rnn', 'lstm', 'convlstm']:
             input_dummy = torch.ones(1, self.args.pre_seq_length, C, dummy_h, dummy_w).to(self.device)
         else:
             raise ValueError(f'Invalid method name {self.args.method}')
@@ -279,14 +280,13 @@ class BaseExperiment(object):
         recorder = Recorder(verbose=True, early_stop_time=min(self._max_epochs // 10, 10))
         num_updates = self._epoch * self.steps_per_epoch
         early_stop = False
-        self.call_hook('before_train_epoch')
-        eta = 1.0  # PredRNN variants
         for epoch in range(self._epoch, self._max_epochs):
             if self._dist and hasattr(self.train_loader.sampler, 'set_epoch'):
                 self.train_loader.sampler.set_epoch(epoch)
 
-            num_updates, loss_mean, eta = self.method.train_one_epoch(self, self.train_loader,
-                                                                      epoch, num_updates, eta)
+            num_updates, loss_mean = self.method.train_one_epoch(
+                self, self.train_loader, epoch, num_updates
+            )
 
             self._epoch = epoch
             if epoch % self.args.log_step == 0:
@@ -311,35 +311,31 @@ class BaseExperiment(object):
             
         if not check_dir(self.path):  # exit training when work_dir is removed
             assert False and "Exit training because work_dir is removed"
-        best_model_path = osp.join(self.path, 'checkpoint.pth')
-        self._load_from_state_dict(torch.load(best_model_path))
-        time.sleep(1)  # wait for some hooks like loggers to finish
-        self.call_hook('after_run')
+        self._load_best_checkpoint()
+        time.sleep(1)  # wait for asynchronous loggers to flush
 
     def vali(self):
         """A validation loop during training"""
-        self.call_hook('before_val_epoch')
         gather_data = getattr(self.args, 'gather_data', True)
-        results,eval_log = self.method.vali_one_epoch(self, self.vali_loader,gather_data=gather_data)
-        self.call_hook('after_val_epoch')
-        
-        
+        t0 = time.time()
+        results, eval_log = self.method.vali_one_epoch(
+            self, self.vali_loader, gather_data=gather_data
+        )
+        t1 = time.time()
+
+        eval_res = None
         if gather_data:
-            metric_list, spatial_norm, channel_names = self.args.metrics, True, None
             save_channels = getattr(self.args, "save_channels", None)
-            preds_eval = results['preds']
-            trues_eval = results['trues']
-            if save_channels is not None:
-                if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
-                    raise ValueError(
-                        f"Metrics expect at least {save_channels} channels, got "
-                        f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
-                    )
-                preds_eval = preds_eval[:, :, :save_channels, ...]
-                trues_eval = trues_eval[:, :, :save_channels, ...]
-            eval_res, eval_log = metric(preds_eval, trues_eval,
-                                        self.vali_loader.dataset.mean, self.vali_loader.dataset.std,
-                                        metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
+            eval_res, eval_log = self._compute_eval_results(
+                results, self.vali_loader, save_channels=save_channels
+            )
+        t2 = time.time()
+
+        if self._rank == 0:
+            val_msg = f"val_timing\tforward_collect={t1 - t0:.2f}s"
+            if gather_data:
+                val_msg += f", eval_metrics={t2 - t1:.2f}s"
+            print_log(val_msg)
         results['metrics'] = np.array([eval_res['mae'], eval_res['mse'],eval_res['rmse'], eval_res['mape']])
         
         if self._rank == 0:
@@ -350,84 +346,37 @@ class BaseExperiment(object):
                 save_stride = getattr(self.args, 'val_save_stride', None)
                 if save_stride is not None and int(save_stride) > 0:
                     folder_path = osp.join(self.path, 'val_saved')
-                    check_dir(folder_path)
                     epoch_tag = f'epoch_{self._epoch + 1:03d}'
-                    save_stride = max(1, int(save_stride))
-                    save_indices = slice(None, None, save_stride)
                     save_channels = getattr(self.args, "save_channels", 10)
-                    for np_data in ['inputs', 'trues', 'preds', 'metrics']:
-                        data_to_save = results[np_data]
-                        if np_data in {'inputs', 'trues', 'preds'} and save_stride > 1:
-                            data_to_save = data_to_save[save_indices]
-                        if np_data in {'inputs', 'trues', 'preds'} and data_to_save.ndim >= 3:
-                            data_to_save = data_to_save[:, :, :save_channels, ...]
-                        np.save(osp.join(folder_path, f'{np_data}_{epoch_tag}.npy'), data_to_save)                      
+                    self._save_results_arrays(
+                        results,
+                        folder_path,
+                        ['inputs', 'trues', 'preds', 'metrics'],
+                        save_channels=save_channels,
+                        save_stride=save_stride,
+                        epoch_tag=epoch_tag
+                    )
 
         return results['loss'].mean()
 
     def test(self):
         """A testing loop of STL methods"""
         if self.args.test:
-            best_model_path = osp.join(self.path, 'checkpoint.pth')
-            self._load_from_state_dict(torch.load(best_model_path))
+            self._load_best_checkpoint()
 
-        self.call_hook('before_val_epoch')
-        results = self.method.test_one_epoch(self, self.test_loader,gather_data=True)
-        self.call_hook('after_val_epoch')
+        t0 = time.time()
+        results = self.method.test_one_epoch(self, self.test_loader, gather_data=True)
+        t1 = time.time()
 
-
-        metric_list, spatial_norm, channel_names = self.args.metrics, True, None
-
-        
         save_channels = getattr(self.args, "save_channels", None)
-        preds_eval = results['preds']
-        trues_eval = results['trues']
-        if save_channels is not None:
-            if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
-                raise ValueError(
-                    f"Metrics expect at least {save_channels} channels, got "
-                    f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
-                )
-            preds_eval = preds_eval[:, :, :save_channels, ...]
-            trues_eval = trues_eval[:, :, :save_channels, ...]
-        eval_res, eval_log = metric(preds_eval, trues_eval,
-                                    self.test_loader.dataset.mean, self.test_loader.dataset.std,
-                                    metrics=metric_list, channel_names=channel_names, spatial_norm=spatial_norm)
-        
-        results['metrics'] = np.array([eval_res['mae'], eval_res['mse'],eval_res['rmse'], eval_res['mape']])
+        eval_res, eval_log = self._compute_eval_results(
+            results, self.test_loader, save_channels=save_channels
+        )
+        t2 = time.time()
 
         if self._rank == 0:
+            print_log(f"test_timing\tforward_collect={t1 - t0:.2f}s, eval_metrics={t2 - t1:.2f}s")
             print_log(eval_log)
-            # Saving test outputs disabled by request.
-            # folder_path = osp.join(self.path, 'saved')
-            # check_dir(folder_path)
-            #
-            # save_channels = getattr(self.args, "save_channels", 10)
-            # for np_data in ['metrics', 'inputs', 'trues', 'preds']:
-            #     data_to_save = results[np_data]
-            #     if np_data in {'inputs', 'trues', 'preds'} and data_to_save.ndim >= 3:
-            #         data_to_save = data_to_save[:, :, :save_channels, ...]
-            #     np.save(osp.join(folder_path, np_data + '.npy'), data_to_save)
+            # Saving test outputs is intentionally disabled.
 
         return eval_res['mse']
-
-    def inference(self):
-        """A inference loop of STL methods"""
-        best_model_path = osp.join(self.path, 'checkpoint.pth')
-        self._load_from_state_dict(torch.load(best_model_path))
-
-        self.call_hook('before_val_epoch')
-        results = self.method.test_one_epoch(self, self.test_loader)
-        self.call_hook('after_val_epoch')
-
-        if self._rank == 0:
-            folder_path = osp.join(self.path, 'saved')
-            check_dir(folder_path)
-            save_channels = getattr(self.args, "save_channels", 10)
-            for np_data in ['inputs', 'trues', 'preds']:
-                data_to_save = results[np_data]
-                if data_to_save.ndim >= 3:
-                    data_to_save = data_to_save[:, :, :save_channels, ...]
-                np.save(osp.join(folder_path, np_data + '.npy'), data_to_save)
-
-        return None

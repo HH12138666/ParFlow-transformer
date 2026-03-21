@@ -6,16 +6,16 @@ cd "$REPO"
 export PYTHONPATH="$REPO:$PYTHONPATH"
 
 # 选择使用的GPU
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=3
 CURRENT_TIME=$(date +"%Y-%m-%d-%H-%M")
-EX_NAME="ParFlow_press/${CURRENT_TIME}_FACTS"
+EX_NAME="ParFlow_wtd/${CURRENT_TIME}_FACTS"
 
 python tools/train.py \
     --config_file configs/parflow/PredFormer.py \
     --dataname parflow \
     --data_root /home/huanghui/data/ParFlow-transformer/data/parflow \
     --res_dir work_dirs \
-    --batch_size  28\
+    --batch_size 28 \
     --val_batch_size 28 \
     --epoch 60 \
     --overwrite \
@@ -25,8 +25,14 @@ python tools/train.py \
     --opt adamw \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
-    --early_stop_epoch 40 \
+    --early_stop_epoch 30 \
     --num_workers 28 \
-    --static_data perm_x,alpha_z6-9,n_z6-9,porosity_z6-9 \
-    --loss_channels 10 \
-    --save_channels 10 \
+    --var_name wtd \
+    --use_evap "" \
+    --use_static_input "" \
+    --loss_channels 1 \
+    --save_channels 1 \
+    --split_mode year \
+    --train_years [2019] \
+    --holdout_years [2020] \
+    --val_ratio_in_holdout 0.5
