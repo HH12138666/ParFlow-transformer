@@ -25,11 +25,11 @@ EPS = 1e-8
 #计算均值和方差相关设置
 NORMALIZE = True
 NORMALIZE_TARGET = True
-STATS_PATH = './stats'   
-STATS_NAME = 'stats_wtd.npz'    
+STATS_PATH = '/home/huanghui/data/ParFlow-transformer/stats'   
+STATS_NAME = 'stats_0.75_wtd_evap_static.npz'    
 STATS_PATH = os.path.join(STATS_PATH, STATS_NAME)         
 #是否拼接 static 数据
-USE_STATIC = False
+USE_STATIC = True
 # evaptrans 固定使用 6-9 层，路径固定为 data_root/evaptrans
 EVAP_CHANNELS = [6, 7, 8, 9]
 
@@ -438,8 +438,8 @@ class ParFlowDataset(Dataset):
             return list(range(s, max_start + 1, stride))
 
         if self.split_mode == 'ratio':
-            n_train = int(self.num_frames * 0.7)
-            n_val = int(self.num_frames * 0.15)
+            n_train = int(self.num_frames * 0.75)
+            n_val = int(self.num_frames * 0.10)
             if self.split == 'train':
                 return build_range(0, n_train)
             if self.split == 'val':

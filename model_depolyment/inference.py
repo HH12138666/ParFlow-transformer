@@ -20,40 +20,42 @@ from openstl.models import PredFormer_Model
 from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb, write_pfb
 
-
+#sbatch /home/huanghui/data/slurm_job/run_inference.sh
 # ---- User configuration ----
 # Training output dir (contains timestamp subdirs with checkpoint.pth)
-WORK_DIR = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_wtd"
-CHECKPOINT_NAME = "2026-03-19-23-50_FACTS"
+WORK_DIR = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press"
+CHECKPOINT_NAME = "2026-03-24-18-31_FACTS"
 CHECKPOINT_PATH = os.path.join(WORK_DIR, CHECKPOINT_NAME, "checkpoint.pth")
 
-DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
-OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/wtd"
-RUN_PARAM = "wtd_evap_static_h60_w84_in12_out12_rollout700"
+DATA_ROOT = "/home/huanghui/data/ParFlow_train_data/parflow_daily"
+OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press"
+RUN_PARAM = "press_evap_static_daily_train0.75_cnn5_k3_h60_w84_in12_out12_rollout43"
 
 # Must match current training data pipeline
-VAR_NAME = "wtd"
+VAR_NAME = "press"
 USE_EVAP = True
 USE_STATIC = True
 STATIC_DATA = "perm_x,alpha_z6-9,n_z6-9,porosity_z6-9"
 
-STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats/stats_wtd_evaptrans_perm_x_alpha_n_porosity.npz"
-EPS = 1e-6
+STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats_daily/stats_0.75_press_evap_static.npz"
+EPS = 1e-8
 
 # Prediction range (parsed from filename tail digits, e.g., 20190001)
-START_HOUR = 20204369
-END_HOUR = 20208760
+START_HOUR = 20200311
+END_HOUR = 20200365
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-USE_AMP = False
+USE_AMP =True
 # options: "bf16" or "fp16"
 AMP_DTYPE = "fp16"
 
 # Rollout config
 USE_ROLLOUT = True
-ROLL_AFT = 700
+ROLL_AFT = 43
 EVAP_CHANNELS = [6, 7, 8, 9]
 PRELOAD_ROLLOUT_AUX = True
+# Speed-only switch: avoid frequent cache flush in inner loop
+EMPTY_CACHE_EACH_BLOCK = False
 
 # Prefer checkpoint-aligned settings from model_param.json
 USE_MODEL_PARAM_JSON = True
@@ -428,6 +430,7 @@ def main():
     evap_files = [ep for _, _, ep in aligned_items]
     items = [(h, vp) for h, vp, _ in aligned_items]
     hours = [h for h, _, _ in aligned_items]
+    rel_paths = [Path(vp).relative_to(var_root) for vp in files]
 
     raw_end = _parse_index(END_HOUR, None)
     end_idx = len(files) - 1 if raw_end is None else _find_index_by_hour(items, int(raw_end))
@@ -468,8 +471,11 @@ def main():
 
     mean_t = torch.from_numpy(mean).view(1, c_in, 1, 1).float().to(DEVICE)
     std_t = torch.from_numpy(std).view(1, c_in, 1, 1).float().to(DEVICE)
+    std_eps_t = std_t + EPS
     mean_y = mean[:out_channels]
     std_y = std[:out_channels]
+    mean_y_4d = mean_y.reshape(1, -1, 1, 1)
+    std_y_4d = std_y.reshape(1, -1, 1, 1)
 
     model = PredFormer_Model(cfg).to(DEVICE)
     ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
@@ -535,7 +541,7 @@ def main():
 
                 x = np.stack(history[-pre_seq:], axis=0)
                 x = torch.from_numpy(x).unsqueeze(0).float().to(DEVICE)
-                x = (x - mean_t) / (std_t + EPS)
+                x = (x - mean_t) / std_eps_t
 
                 pred_full = np.zeros((aft_seq, out_channels, h, w), dtype=np.float32)
                 counts = np.zeros_like(pred_full, dtype=np.int32)
@@ -543,7 +549,7 @@ def main():
                 for top, left in coords:
                     x_patch = x[..., top: top + space_h, left: left + space_w]
                     x_patch, pad_h, pad_w = _pad_input_for_model(x_patch, patch_size, pad_to_patch)
-                    with torch.no_grad():
+                    with torch.inference_mode():
                         with _autocast_ctx():
                             pred = _predict_rollout(model, x_patch, pre_seq, aft_seq, c_in, out_channels)
                     pred = _crop_pred_back(pred, pad_h, pad_w)
@@ -553,12 +559,11 @@ def main():
 
                 mask = counts > 0
                 pred_full[mask] = pred_full[mask] / counts[mask]
-                pred_full = pred_full * std_y.reshape(1, -1, 1, 1) + mean_y.reshape(1, -1, 1, 1)
+                pred_full = pred_full * std_y_4d + mean_y_4d
 
                 for k in range(block):
                     idx = t0 + pre_seq + predicted + k
-                    src = Path(files[idx])
-                    rel = src.relative_to(var_root)
+                    rel = rel_paths[idx]
                     out_path = out_dir / rel.parent / f"pred_{rel.name}"
                     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -582,12 +587,12 @@ def main():
                         history.pop(0)
 
                 predicted += block
-                if DEVICE == "cuda":
+                if DEVICE == "cuda" and EMPTY_CACHE_EACH_BLOCK:
                     torch.cuda.empty_cache()
         else:
             x = np.stack(history, axis=0)
             x = torch.from_numpy(x).unsqueeze(0).float().to(DEVICE)
-            x = (x - mean_t) / (std_t + EPS)
+            x = (x - mean_t) / std_eps_t
 
             pred_full = np.zeros((aft_seq, out_channels, h, w), dtype=np.float32)
             counts = np.zeros_like(pred_full, dtype=np.int32)
@@ -595,7 +600,7 @@ def main():
             for top, left in coords:
                 x_patch = x[..., top: top + space_h, left: left + space_w]
                 x_patch, pad_h, pad_w = _pad_input_for_model(x_patch, patch_size, pad_to_patch)
-                with torch.no_grad():
+                with torch.inference_mode():
                     with _autocast_ctx():
                         pred = _predict_rollout(model, x_patch, pre_seq, aft_seq, c_in, out_channels)
                 pred = _crop_pred_back(pred, pad_h, pad_w)
@@ -605,12 +610,11 @@ def main():
 
             mask = counts > 0
             pred_full[mask] = pred_full[mask] / counts[mask]
-            pred_full = pred_full * std_y.reshape(1, -1, 1, 1) + mean_y.reshape(1, -1, 1, 1)
+            pred_full = pred_full * std_y_4d + mean_y_4d
 
             for k in range(aft_seq):
                 idx = t0 + pre_seq + k
-                src = Path(files[idx])
-                rel = src.relative_to(var_root)
+                rel = rel_paths[idx]
                 out_path = out_dir / rel.parent / f"pred_{rel.name}"
                 out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -625,3 +629,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

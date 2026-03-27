@@ -167,15 +167,13 @@ class PredFormer_Model(nn.Module):
             nn.Linear(self.patch_dim, self.dim),
             )
         self.attn_type = model_config.get('attn_type', model_config.get('pre_attn_type', 'none'))
-        if self.attn_type not in {'none', 'pre_cross', 'post_cross', 'film'}:
+        if self.attn_type not in {'none', 'pre_cross', 'post_cross'}:
             raise ValueError(f"Unknown attn_type={self.attn_type}")
         self.pre_cross_attn = None
         self.pre_cross_norm_q = None
         self.pre_cross_norm_kv = None
         self.to_patch_embedding_dyn = None
         self.to_patch_embedding_static = None
-        self.film_in_channels = None
-        self.film_mlp = None
         if self.attn_type in {'pre_cross', 'post_cross'}:
             static_channels = self.static_out_channels if self.static_proj is not None else self.static_in_channels
             if static_channels is None:
@@ -194,22 +192,6 @@ class PredFormer_Model(nn.Module):
             self.pre_cross_norm_kv = nn.LayerNorm(self.dim)
             self.pre_cross_attn = CrossAttention(
                 self.dim, heads=self.heads, dim_head=self.dim_head, dropout=self.attn_dropout
-            )
-        elif self.attn_type == 'film':
-            if self.static_in_channels is None:
-                raise ValueError("attn_type='film' requires static channels.")
-            self.film_in_channels = (
-                self.static_out_channels if self.static_proj is not None else self.static_in_channels
-            )
-            dyn_patch_dim = self.dynamic_channels * self.patch_size ** 2
-            self.to_patch_embedding_dyn = nn.Sequential(
-                Rearrange('b t c (h p1) (w p2) -> b t (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size),
-                nn.Linear(dyn_patch_dim, self.dim),
-            )
-            self.film_mlp = nn.Sequential(
-                nn.Linear(self.film_in_channels, self.dim * 2),
-                nn.GELU(),
-                nn.Linear(self.dim * 2, self.dim * 2),
             )
         self.pos_embedding = nn.Parameter(sinusoidal_embedding(self.num_frames_in * self.num_patches, self.dim),
                                                requires_grad=False).view(1, self.num_frames_in, self.num_patches, self.dim)
@@ -237,11 +219,9 @@ class PredFormer_Model(nn.Module):
             )
         dyn = None
         static = None
-        static_raw = None
         if self.static_in_channels is not None:
             dyn = x[:, :, :self.dynamic_channels]
             static = x[:, :, self.dynamic_channels:self.dynamic_channels + self.static_in_channels]
-            static_raw = static
         if self.static_proj is not None:
             static = static.reshape(B * T, self.static_in_channels, H, W)
             static = self.static_proj(static)
@@ -267,25 +247,9 @@ class PredFormer_Model(nn.Module):
             )
             x = q.reshape(B, T, n, self.dim)
         else:
-            if self.attn_type == 'film':
-                if static_raw is None:
-                    raise ValueError("attn_type='film' requires static channels.")
-                # Use dynamic only for transformer input
-                x = self.to_patch_embedding_dyn(dyn)
-                x = x + pos
-                b, t, n, _ = x.shape
-                # Global conditioning vector from static (use CNN output if enabled)
-                cond_src = static if self.static_proj is not None else static_raw
-                cond = cond_src.mean(dim=(1, 3, 4))  # (B, C_static)
-                gamma_beta = self.film_mlp(cond)  # (B, 2D)
-                gamma, beta = gamma_beta.chunk(2, dim=-1)
-                gamma = gamma.view(B, 1, 1, self.dim)
-                beta = beta.view(B, 1, 1, self.dim)
-                x = gamma * x + beta
-            else:
-                x = self.to_patch_embedding(x)
-                x = x + pos
-                b, t, n, _ = x.shape
+            x = self.to_patch_embedding(x)
+            x = x + pos
+            b, t, n, _ = x.shape
             # attn_type == 'none' or 'post_cross' falls through without extra attention
         
         # ts-t branch

@@ -258,7 +258,7 @@ class BaseExperiment(object):
         dummy_h = getattr(model_ref, 'image_height', dummy_h)
         dummy_w = getattr(model_ref, 'image_width', dummy_w)
 
-        if self.args.method in ['predformer', 'cnn', 'rnn', 'lstm', 'convlstm']:
+        if self.args.method in ['predformer']:
             input_dummy = torch.ones(1, self.args.pre_seq_length, C, dummy_h, dummy_w).to(self.device)
         else:
             raise ValueError(f'Invalid method name {self.args.method}')

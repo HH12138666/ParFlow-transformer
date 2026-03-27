@@ -4,18 +4,18 @@ model_config = {
     # wtd h w c
     'height': 146,
     'width': 252,
-    'input_channels': 5,   # wtd 1 层 + static 22 通道
-    'dynamic_channels': 5,  # wtd 单通道
-    'static_in_channels': None, # 静态输入通道数
-    'static_out_channels': None, # 静态压缩到 n 层，如果不使用cnn处理静态数据，则设为None
-    'in_channels': 5,   # 动态 1 + 静态压缩 5
-    'out_channels': 1,  # 输出：wtd 单通道
+    'input_channels': 36,   # wtd 1 层 + static 22 通道
+    'dynamic_channels': 14,  # wtd 单通道
+    'static_in_channels': 22, # 静态输入通道数
+    'static_out_channels': 5, # 静态压缩到 n 层，如果不使用cnn处理静态数据，则设为None
+    'in_channels': 19,   # 动态 5 + 静态压缩 5
+    'out_channels': 10,  # 输出：wtd 单通道
     
     # attention type
-    'attn_type': 'none',  # none or pre_cross or post_cross or film
+    'attn_type': 'pre_cross',  # none or pre_cross or post_cross
     
     # cnn卷积核大小
-    'static_kernel_size':1,
+    'static_kernel_size':3,
     
     # space stride
     'space_h': 60,
@@ -23,7 +23,7 @@ model_config = {
     'space_stride_h': 30, # None表示不裁剪，直接用全图，整数表示裁剪成patch的大小
     'space_stride_w': 42, # None表示不裁剪，直接用全图，整数表示裁剪成patch的大小
     'val_save_stride': 0,# 验证集保存步长，0表示不保存
-    'pad_to_patch': True, # 整图模式下补到 patch_size 的整数倍，滑窗模式可关掉
+    'pad_to_patch': False, # 整图模式下补到 patch_size 的整数倍，滑窗模式可关掉
 
     
     # video length in and out

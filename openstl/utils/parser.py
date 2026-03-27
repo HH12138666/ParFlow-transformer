@@ -100,7 +100,7 @@ def create_parser():
 
     # method parameters
     parser.add_argument('--method', '-m', default='predformer', type=str,
-                        choices=['predformer', 'cnn', 'rnn', 'lstm', 'convlstm'],
+                        choices=['predformer'],
                         help='Name of video prediction method to train')
     parser.add_argument('--config_file', '-c', default='configs/parflow/PredFormer.py', type=str,
                         help='Path to the default config file')

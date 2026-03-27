@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import numpy as np
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -13,26 +14,34 @@ from openstl.datasets.dataloader_parflow import (
     _read_evap_frame,
     _read_static_stack,
     _resolve_parflow_roots,
+    _extract_year,
 )
-
+#sbatch /home/huanghui/data/slurm_job/run_compute_mean_std.sh
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
 STATS_OUT = "/home/huanghui/data/ParFlow-transformer/stats"  # 输出目录
 # perm_x_alpha_n_porosity
-STATS_NAME = "stats_wtd"
+STATS_NAME = "stats_20_7462_8181_press_evap_static"
 STATS_OUT = os.path.join(STATS_OUT, f"{STATS_NAME}.npz")
 os.makedirs(os.path.dirname(STATS_OUT), exist_ok=True)
 SPATIAL_STRIDE = 1
 TIME_STRIDE = 1
 MAX_FILES = 0
+# 按比例使用样本（按时间排序后的前比例），None 表示不按比例截取
+TRAIN_RATIO = None
 PRESS_ROOT = None
 EVAP_ROOT = None
-MAIN_VAR = "wtd"
-USE_EVAP = False
-USE_STATIC_INPUT = False
+MAIN_VAR = "press"
+USE_EVAP = True
+USE_STATIC_INPUT = True
 
 STATIC_ROOT = None
 # perm_x,alpha,n,porosity
 STATIC_DATA = "perm_x,alpha,n,porosity"  # 逗号分隔关键词（大小写不敏感），为 None 时使用全部静态数据
+# 只统计指定年份；None 表示全部年份，例如 [2019]、[2019, 2020]
+ONLY_YEARS =  [2019, 2020]
+# 只统计指定 ID 范围（基于文件名末尾数字），None 表示不限制
+START_ID = 20207462
+END_ID = 20208181
 
 def _read_press_frame_for_stats(press_path):
     arr = read_pfb(get_absolute_path(press_path)).astype(np.float32)
@@ -102,6 +111,80 @@ def _concat_stats(parts):
     return np.concatenate(keep, axis=0)
 
 
+def _normalize_years(years):
+    if years is None:
+        return None
+    if isinstance(years, int):
+        return {int(years)}
+    return {int(y) for y in years}
+
+
+def _extract_suffix_id(path):
+    name = os.path.basename(str(path))
+    m = re.search(r"(\d+)(?!.*\d)", name)
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _filter_files_by_year(files, years):
+    years_set = _normalize_years(years)
+    if years_set is None:
+        return files
+
+    out = []
+    for f in files:
+        y = _extract_year(f)
+        if y is None:
+            raise ValueError(f"Cannot parse year from filename/folder: {f}")
+        if y in years_set:
+            out.append(f)
+    return out
+
+
+def _filter_files_by_id_range(files, start_id=None, end_id=None):
+    if start_id is None and end_id is None:
+        return files
+
+    s = None if start_id is None else int(start_id)
+    e = None if end_id is None else int(end_id)
+    out = []
+    for f in files:
+        fid = _extract_suffix_id(f)
+        if fid is None:
+            continue
+        if s is not None and fid < s:
+            continue
+        if e is not None and fid > e:
+            continue
+        out.append(f)
+    return out
+
+
+def _resolve_max_files(total_files, max_files, train_ratio):
+    if total_files <= 0:
+        return 0
+
+    ratio_cap = None
+    if train_ratio is not None:
+        ratio = float(train_ratio)
+        if ratio <= 0 or ratio > 1:
+            raise ValueError(f"TRAIN_RATIO must be in (0, 1], got {train_ratio}")
+        ratio_cap = max(1, int(total_files * ratio))
+
+    fixed_cap = None
+    if max_files is not None:
+        fixed_cap = max(1, int(max_files))
+
+    if ratio_cap is None and fixed_cap is None:
+        return None
+    if ratio_cap is None:
+        return min(total_files, fixed_cap)
+    if fixed_cap is None:
+        return min(total_files, ratio_cap)
+    return min(total_files, ratio_cap, fixed_cap)
+
+
 def compute_mean_std(files,
                      spatial_stride=1,
                      time_stride=1,
@@ -160,13 +243,34 @@ def main():
         raise ValueError("STATIC_DATA is set but static_root is None")
 
     press_files = _list_pfb_files(press_root)
+    press_files = _filter_files_by_year(press_files, ONLY_YEARS)
+    press_files = _filter_files_by_id_range(press_files, START_ID, END_ID)
+    if not press_files:
+        raise ValueError(
+            f"No press files selected after filters: years={ONLY_YEARS}, "
+            f"id_range=[{START_ID}, {END_ID}]"
+        )
+
     evap_files = _list_pfb_files(evap_root) if evap_root is not None else None
+    if evap_files is not None:
+        evap_files = _filter_files_by_year(evap_files, ONLY_YEARS)
+        evap_files = _filter_files_by_id_range(evap_files, START_ID, END_ID)
+        if not evap_files:
+            raise ValueError(
+                f"No evap files selected after filters: years={ONLY_YEARS}, "
+                f"id_range=[{START_ID}, {END_ID}]"
+            )
     static_arr = (
         _read_static_stack(static_root, static_data=STATIC_DATA)
         if (USE_STATIC_INPUT and static_root is not None)
         else None
     )
-    max_files = MAX_FILES if MAX_FILES > 0 else None
+    max_files_cfg = MAX_FILES if MAX_FILES > 0 else None
+    max_files = _resolve_max_files(
+        total_files=len(press_files),
+        max_files=max_files_cfg,
+        train_ratio=TRAIN_RATIO,
+    )
 
     mean, std = compute_mean_std(
         files=press_files,
@@ -178,9 +282,12 @@ def main():
     )
     os.makedirs(os.path.dirname(STATS_OUT), exist_ok=True)
     np.savez(STATS_OUT, mean=mean, std=std)
-    used = len(press_files) if max_files is None else min(len(press_files), max_files)
+    used = len(press_files) if max_files is None else int(max_files)
     print(f"Used {used} files")
     print(f"Main variable: {MAIN_VAR}")
+    print(f"Year filter: {ONLY_YEARS}")
+    print(f"ID filter: [{START_ID}, {END_ID}]")
+    print(f"Train ratio: {TRAIN_RATIO}")
     print(f"Stats saved to {STATS_OUT}; mean shape={mean.shape}, std shape={std.shape}")
 
 
