@@ -22,8 +22,6 @@ model_config = {
     'space_w': 84,
     'space_stride_h': 30, # None表示不裁剪，直接用全图，整数表示裁剪成patch的大小
     'space_stride_w': 42, # None表示不裁剪，直接用全图，整数表示裁剪成patch的大小
-    'val_save_stride': 0,# 验证集保存步长，0表示不保存
-    'pad_to_patch': False, # 整图模式下补到 patch_size 的整数倍，滑窗模式可关掉
 
     
     # video length in and out
@@ -49,6 +47,4 @@ space_h = model_config['space_h']
 space_w = model_config['space_w']
 space_stride_h = model_config['space_stride_h']
 space_stride_w = model_config['space_stride_w']
-val_save_stride = model_config['val_save_stride']
 patch_size = model_config['patch_size']
-pad_to_patch = model_config['pad_to_patch']

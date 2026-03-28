@@ -96,13 +96,8 @@ class PredFormer_Model(nn.Module):
         self.patch_size = model_config['patch_size']
         self.valid_height = model_config.get('space_h', model_config['height'])
         self.valid_width = model_config.get('space_w', model_config['width'])
-        self.pad_to_patch = bool(model_config.get('pad_to_patch', False))
-        if self.pad_to_patch:
-            self.image_height = ((self.valid_height + self.patch_size - 1) // self.patch_size) * self.patch_size
-            self.image_width = ((self.valid_width + self.patch_size - 1) // self.patch_size) * self.patch_size
-        else:
-            self.image_height = self.valid_height
-            self.image_width = self.valid_width
+        self.image_height = self.valid_height
+        self.image_width = self.valid_width
         self.num_patches_h = self.image_height // self.patch_size
         self.num_patches_w = self.image_width // self.patch_size
         self.num_patches = self.num_patches_h * self.num_patches_w
@@ -214,7 +209,7 @@ class PredFormer_Model(nn.Module):
         if H != self.image_height or W != self.image_width:
             raise ValueError(
                 f"Expected spatial size {(self.image_height, self.image_width)}, got {(H, W)}. "
-                f"Check pad_to_patch={self.pad_to_patch}, patch_size={self.patch_size}, "
+                f"Check patch_size={self.patch_size}, "
                 f"and dataloader padding settings."
             )
         dyn = None

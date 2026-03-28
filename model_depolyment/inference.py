@@ -10,7 +10,6 @@ from datetime import datetime
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 repo = "/home/huanghui/data/ParFlow-transformer"
 sys.path.insert(0, repo)
@@ -24,12 +23,12 @@ from parflow.tools.io import read_pfb, write_pfb
 # ---- User configuration ----
 # Training output dir (contains timestamp subdirs with checkpoint.pth)
 WORK_DIR = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press"
-CHECKPOINT_NAME = "2026-03-24-18-31_FACTS"
+CHECKPOINT_NAME = "2026-03-26-22-11_FACTS"
 CHECKPOINT_PATH = os.path.join(WORK_DIR, CHECKPOINT_NAME, "checkpoint.pth")
 
-DATA_ROOT = "/home/huanghui/data/ParFlow_train_data/parflow_daily"
+DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
 OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press"
-RUN_PARAM = "press_evap_static_daily_train0.75_cnn5_k3_h60_w84_in12_out12_rollout43"
+RUN_PARAM = "press_evap_static_train0.75_cnn5_k1_h60_w84_in12_out12_rollout720_test"
 
 # Must match current training data pipeline
 VAR_NAME = "press"
@@ -37,12 +36,12 @@ USE_EVAP = True
 USE_STATIC = True
 STATIC_DATA = "perm_x,alpha_z6-9,n_z6-9,porosity_z6-9"
 
-STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats_daily/stats_0.75_press_evap_static.npz"
+STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats/stats_0.75_press_evap_static.npz"
 EPS = 1e-8
 
 # Prediction range (parsed from filename tail digits, e.g., 20190001)
-START_HOUR = 20200311
-END_HOUR = 20200365
+START_HOUR = 20207450
+END_HOUR = 20208760
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 USE_AMP =True
@@ -51,7 +50,7 @@ AMP_DTYPE = "fp16"
 
 # Rollout config
 USE_ROLLOUT = True
-ROLL_AFT = 43
+ROLL_AFT = 720
 EVAP_CHANNELS = [6, 7, 8, 9]
 PRELOAD_ROLLOUT_AUX = True
 # Speed-only switch: avoid frequent cache flush in inner loop
@@ -339,40 +338,6 @@ def _find_index_by_hour(items, hour):
     raise ValueError(f"Hour {hour} not found in input files")
 
 
-def _compute_patch_padding(height, width, patch_size):
-    if patch_size is None or patch_size <= 0:
-        return 0, 0
-    pad_h = (patch_size - height % patch_size) % patch_size
-    pad_w = (patch_size - width % patch_size) % patch_size
-    return pad_h, pad_w
-
-
-def _pad_input_for_model(x, patch_size, pad_to_patch):
-    # x: (B, T, C, H, W)
-    if not pad_to_patch:
-        return x, 0, 0
-    h = x.shape[-2]
-    w = x.shape[-1]
-    pad_h, pad_w = _compute_patch_padding(h, w, patch_size)
-    if pad_h == 0 and pad_w == 0:
-        return x, 0, 0
-    # F.pad with replicate mode expects 4D for 4-value padding.
-    # Flatten (B, T) so we pad spatial dims on 4D tensors.
-    b, t, c, _, _ = x.shape
-    x = x.reshape(b * t, c, h, w)
-    x = F.pad(x, (0, pad_w, 0, pad_h), mode="replicate")
-    x = x.reshape(b, t, c, h + pad_h, w + pad_w)
-    return x, pad_h, pad_w
-
-
-def _crop_pred_back(pred, pad_h, pad_w):
-    if pad_h == 0 and pad_w == 0:
-        return pred
-    h_end = pred.shape[-2] - pad_h if pad_h > 0 else pred.shape[-2]
-    w_end = pred.shape[-1] - pad_w if pad_w > 0 else pred.shape[-1]
-    return pred[..., :h_end, :w_end]
-
-
 def _to_bool(value):
     if isinstance(value, bool):
         return value
@@ -382,9 +347,19 @@ def _to_bool(value):
 
 
 def _load_model_params(checkpoint_path):
-    model_param_path = Path(checkpoint_path).resolve().parent / "model_param.json"
-    if not model_param_path.exists():
+    ckpt_path = Path(checkpoint_path).resolve()
+    candidates = [
+        ckpt_path.parent / "model_param.json",
+        ckpt_path.parent.parent / "model_param.json",
+    ]
+    model_param_path = None
+    for p in candidates:
+        if p.exists():
+            model_param_path = p
+            break
+    if model_param_path is None:
         return {}, None
+
     with model_param_path.open("r", encoding="utf-8") as f:
         params = json.load(f)
     if not isinstance(params, dict):
@@ -456,8 +431,6 @@ def main():
     pre_seq = int(cfg["pre_seq"])
     aft_seq = int(cfg["after_seq"])
     out_channels = int(cfg["out_channels"])
-    patch_size = int(cfg.get("patch_size", 1))
-    pad_to_patch = bool(cfg.get("pad_to_patch", False))
 
     total_aft = ROLL_AFT if USE_ROLLOUT else aft_seq
     if end_idx - start_idx + 1 < pre_seq + total_aft:
@@ -548,11 +521,9 @@ def main():
 
                 for top, left in coords:
                     x_patch = x[..., top: top + space_h, left: left + space_w]
-                    x_patch, pad_h, pad_w = _pad_input_for_model(x_patch, patch_size, pad_to_patch)
                     with torch.inference_mode():
                         with _autocast_ctx():
                             pred = _predict_rollout(model, x_patch, pre_seq, aft_seq, c_in, out_channels)
-                    pred = _crop_pred_back(pred, pad_h, pad_w)
                     pred = pred.squeeze(0).float().cpu().numpy()
                     pred_full[:, :, top: top + space_h, left: left + space_w] += pred
                     counts[:, :, top: top + space_h, left: left + space_w] += 1
@@ -599,11 +570,9 @@ def main():
 
             for top, left in coords:
                 x_patch = x[..., top: top + space_h, left: left + space_w]
-                x_patch, pad_h, pad_w = _pad_input_for_model(x_patch, patch_size, pad_to_patch)
                 with torch.inference_mode():
                     with _autocast_ctx():
                         pred = _predict_rollout(model, x_patch, pre_seq, aft_seq, c_in, out_channels)
-                pred = _crop_pred_back(pred, pad_h, pad_w)
                 pred = pred.squeeze(0).float().cpu().numpy()
                 pred_full[:, :, top: top + space_h, left: left + space_w] += pred
                 counts[:, :, top: top + space_h, left: left + space_w] += 1
@@ -629,4 +598,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

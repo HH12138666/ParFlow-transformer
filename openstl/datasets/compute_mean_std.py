@@ -20,19 +20,19 @@ from openstl.datasets.dataloader_parflow import (
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
 STATS_OUT = "/home/huanghui/data/ParFlow-transformer/stats"  # 输出目录
 # perm_x_alpha_n_porosity
-STATS_NAME = "stats_20_7462_8181_press_evap_static"
+STATS_NAME = "stats_test_0.75_press_evap"
 STATS_OUT = os.path.join(STATS_OUT, f"{STATS_NAME}.npz")
 os.makedirs(os.path.dirname(STATS_OUT), exist_ok=True)
 SPATIAL_STRIDE = 1
 TIME_STRIDE = 1
 MAX_FILES = 0
 # 按比例使用样本（按时间排序后的前比例），None 表示不按比例截取
-TRAIN_RATIO = None
+TRAIN_RATIO = 0.75
 PRESS_ROOT = None
 EVAP_ROOT = None
 MAIN_VAR = "press"
 USE_EVAP = True
-USE_STATIC_INPUT = True
+USE_STATIC_INPUT = False
 
 STATIC_ROOT = None
 # perm_x,alpha,n,porosity
@@ -40,8 +40,8 @@ STATIC_DATA = "perm_x,alpha,n,porosity"  # 逗号分隔关键词（大小写不�
 # 只统计指定年份；None 表示全部年份，例如 [2019]、[2019, 2020]
 ONLY_YEARS =  [2019, 2020]
 # 只统计指定 ID 范围（基于文件名末尾数字），None 表示不限制
-START_ID = 20207462
-END_ID = 20208181
+START_ID = None
+END_ID = None
 
 def _read_press_frame_for_stats(press_path):
     arr = read_pfb(get_absolute_path(press_path)).astype(np.float32)
@@ -282,8 +282,10 @@ def main():
     )
     os.makedirs(os.path.dirname(STATS_OUT), exist_ok=True)
     np.savez(STATS_OUT, mean=mean, std=std)
-    used = len(press_files) if max_files is None else int(max_files)
-    print(f"Used {used} files")
+    used_files = len(_select_files(press_files, TIME_STRIDE, max_files))
+    used_hours = used_files  # 当前数据是每个文件对应 1 小时
+    print(f"Used {used_files} files")
+    print(f"Used total hours: {used_hours} h")
     print(f"Main variable: {MAIN_VAR}")
     print(f"Year filter: {ONLY_YEARS}")
     print(f"ID filter: [{START_ID}, {END_ID}]")

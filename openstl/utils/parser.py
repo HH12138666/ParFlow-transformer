@@ -10,8 +10,6 @@ def create_parser():
     # Set-up parameters
     parser.add_argument('--device', default='cuda', type=str,
                         help='Name of device to use for tensor computations (cuda/cpu)')
-    parser.add_argument('--dist', action='store_true', default=False,
-                        help='Whether to use distributed training (DDP)')
     parser.add_argument('--display_step', default=10, type=int,
                         help='Interval in batches between display of training metrics')
     parser.add_argument('--res_dir', default='work_dirs', type=str)
@@ -19,19 +17,11 @@ def create_parser():
     parser.add_argument('--use_gpu', default=True, type=bool)
     parser.add_argument('--fp16', action='store_true', default=False,
                         help='Whether to use Native AMP for mixed precision training (PyTorch=>1.6.0)')
-    parser.add_argument('--torchscript', action='store_true', default=False,
-                        help='Whether to use torchscripted model')
     parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--diff_seed', action='store_true', default=False,
-                        help='Whether to set different seeds for different ranks')
     parser.add_argument('--fps', action='store_true', default=False,
                         help='Whether to measure inference speed (FPS)')
     parser.add_argument('--empty_cache', action='store_true', default=True,
                         help='Whether to empty cuda cache after GPU training')
-    parser.add_argument('--find_unused_parameters', action='store_true', default=False,
-                        help='Whether to find unused parameters in forward during DDP training')
-    parser.add_argument('--broadcast_buffers', action='store_false', default=True,
-                        help='Whether to set broadcast_buffers to false during DDP training')
     parser.add_argument('--resume_from', type=str, default=None, help='the checkpoint file to resume from')
     parser.add_argument('--auto_resume', action='store_true', default=False,
                         help='When training was interupted, resume from the latest checkpoint')
@@ -39,12 +29,6 @@ def create_parser():
     parser.add_argument('--inference', '-i', action='store_true', default=False, help='Only performs inference')
     parser.add_argument('--deterministic', action='store_true', default=False,
                         help='whether to set deterministic options for CUDNN backend (reproducable)')
-    parser.add_argument('--launcher', default='none', type=str,
-                        choices=['none', 'pytorch', 'slurm', 'mpi'],
-                        help='job launcher for distributed training')
-    parser.add_argument('--local_rank', type=int, default=0)
-    parser.add_argument('--port', type=int, default=29500,
-                        help='port only works when launcher=="slurm"')
 
     # dataset parameters
     parser.add_argument('--batch_size', '-b', default=10, type=int, help='Training batch size')
@@ -79,10 +63,6 @@ def create_parser():
     parser.add_argument('--space_w', default=None, type=int, help='Spatial crop width for ParFlow tiling')
     parser.add_argument('--space_stride_h', default=None, type=int, help='Vertical stride for ParFlow tiling')
     parser.add_argument('--space_stride_w', default=None, type=int, help='Horizontal stride for ParFlow tiling')
-    parser.add_argument('--val_save_stride', default=None, type=int,
-                        help='Subsample stride for saving merged validation samples (saving every N samples)')
-    parser.add_argument('--pad_to_patch', action='store_true', default=False,
-                        help='Pad full-frame inputs to the next multiple of patch_size before model forward')
     parser.add_argument('--split_mode', default='ratio', type=str,
                         help="Data split mode: 'ratio' or 'year'")
     parser.add_argument('--train_years', type=parse_list, default=None,
@@ -175,27 +155,19 @@ def default_parser():
     default_values = {
         # Set-up parameters
         'device': 'cuda',
-        'dist': False,
         'display_step': 10,
         'res_dir': 'work_dirs',
         'ex_name': 'Debug',
         'use_gpu': True,
         'fp16': False,
-        'torchscript': False,
         'seed': 42,
-        'diff_seed': False,
         'fps': False,
         'empty_cache': True,
-        'find_unused_parameters': False,
-        'broadcast_buffers': True,
         'resume_from': None,
         'auto_resume': False,
         'test': False,
         'inference': False,
         'deterministic': False,
-        'launcher': 'pytorch',
-        'local_rank': 0,
-        'port': 29500,
         
         # dataset parameters
         'batch_size': 16,
@@ -220,8 +192,6 @@ def default_parser():
         'space_w': None,
         'space_stride_h': None,
         'space_stride_w': None,
-        'val_save_stride': None,
-        'pad_to_patch': False,
         'split_mode': 'ratio',
         'train_years': None,
         'holdout_years': None,

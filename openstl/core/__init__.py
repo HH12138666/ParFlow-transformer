@@ -1,8 +1,7 @@
 from .metrics import metric
 from .recorder import Recorder
 from .optim_scheduler import get_optim_scheduler
-from .optim_constant import optim_parameters
 
 __all__ = [
-    'metric', 'Recorder', 'get_optim_scheduler', 'optim_parameters'
+    'metric', 'Recorder', 'get_optim_scheduler'
 ]

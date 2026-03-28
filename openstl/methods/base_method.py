@@ -2,22 +2,12 @@ from typing import Dict, List, Union
 import numpy as np
 
 import torch
-from torch.nn.parallel import DistributedDataParallel as NativeDDP
 from contextlib import suppress
-from timm.utils import NativeScaler
 from timm.utils.agc import adaptive_clip_grad
 
 from openstl.core import metric
 from openstl.core.optim_scheduler import get_optim_scheduler
-from openstl.utils import gather_tensors_batch, get_dist_info, ProgressBar
-
-has_native_amp = False
-try:
-    if getattr(torch.cuda.amp, 'autocast') is not None:
-        has_native_amp = True
-except AttributeError:
-    pass
-
+from openstl.utils import ProgressBar
 
 class Base_method(object):
     """Base Method.
@@ -32,17 +22,12 @@ class Base_method(object):
     def __init__(self, args, device, steps_per_epoch):
         super(Base_method, self).__init__()
         self.args = args
-        self.dist = args.dist
         self.device = device
         self.config = args.__dict__
         self.criterion = None
         self.model_optim = None
         self.scheduler = None
-        if self.dist:
-            self.rank, self.world_size = get_dist_info()
-            assert self.rank == int(device.split(':')[-1])
-        else:
-            self.rank, self.world_size = 0, 1
+        self.rank, self.world_size = 0, 1
         self.clip_value = self.args.clip_grad
         self.clip_mode = self.args.clip_mode if self.clip_value is not None else None
         # setup automatic mixed-precision (AMP) loss scaling and op casting
@@ -58,19 +43,6 @@ class Base_method(object):
     def _init_optimizer(self, steps_per_epoch):
         return get_optim_scheduler(
             self.args, self.args.epoch, self.model, steps_per_epoch)
-
-    def _init_distributed(self):
-        """Initialize DDP training"""
-        if self.args.fp16 and has_native_amp:
-            self.amp_autocast = torch.cuda.amp.autocast
-            self.loss_scaler = NativeScaler()
-            if self.rank == 0:
-               print('Using native PyTorch AMP. Training in mixed precision (fp16).')
-        else:
-            print('AMP not enabled. Training in float32.')
-        self.model = NativeDDP(self.model, device_ids=[self.rank],
-                               broadcast_buffers=self.args.broadcast_buffers,
-                               find_unused_parameters=self.args.find_unused_parameters)
 
     def train_one_epoch(self, runner, train_loader, **kwargs): 
         """Train the model with train_loader.
@@ -112,104 +84,23 @@ class Base_method(object):
             )
         return tensor[..., :target_h, :target_w]
 
-    def _dist_forward_collect(self, data_loader, length=None, gather_data=False):
-        """Forward and collect predictios in a distributed manner.
-
-        Args:
-            data_loader: dataloader of evaluation.
-            length (int): Expected length of output arrays.
-            gather_data (bool): Whether to gather raw predictions and inputs.
-
-        Returns:
-            results_all (dict(np.ndarray)): The concatenated outputs.
-        """
-        # preparation
-        results = []
-        length = len(data_loader.dataset) if length is None else length
-        if self.rank == 0:
-            prog_bar = ProgressBar(len(data_loader))
-
-        # loop
-        for idx, (batch_x, batch_y) in enumerate(data_loader):
-            if idx == 0:
-                part_size = batch_x.shape[0]
-            with torch.no_grad():
-                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
-                pred_y = self._predict(batch_x, batch_y)
-                batch_x_eval = self._crop_to_valid_spatial(batch_x)
-                batch_y_eval = self._crop_to_valid_spatial(batch_y)
-                pred_y_eval = self._crop_to_valid_spatial(pred_y)
-
-            loss_channels = getattr(self.args, "loss_channels", 10)
-            if pred_y_eval.shape[2] < loss_channels or batch_y_eval.shape[2] < loss_channels:
-                raise ValueError(
-                    f"Loss expects at least {loss_channels} channels, got "
-                    f"{pred_y_eval.shape[2]} (pred) and {batch_y_eval.shape[2]} (true)."
-                )
-            if gather_data:  # return raw datas
-                loss_value = self.criterion(
-                    pred_y_eval[:, :, :loss_channels, ...],
-                    batch_y_eval[:, :, :loss_channels, ...],
-                ).detach().cpu().numpy().reshape(1)
-                results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
-                                        [batch_x_eval.cpu().numpy(), pred_y_eval.cpu().numpy(), batch_y_eval.cpu().numpy(), loss_value])))
-            else:  # return metrics
-                pred_eval = pred_y_eval.cpu().numpy()
-                true_eval = batch_y_eval.cpu().numpy()
-                save_channels = getattr(self.args, "save_channels", None)
-                if save_channels is not None:
-                    if pred_eval.shape[2] < save_channels or true_eval.shape[2] < save_channels:
-                        raise ValueError(
-                            f"Metrics expect at least {save_channels} channels, got "
-                            f"{pred_eval.shape[2]} (pred) and {true_eval.shape[2]} (true)."
-                        )
-                    pred_eval = pred_eval[:, :, :save_channels, ...]
-                    true_eval = true_eval[:, :, :save_channels, ...]
-                eval_res, _ = metric(pred_eval, true_eval,
-                                     data_loader.dataset.mean, data_loader.dataset.std,
-                                     metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
-                eval_res['loss'] = self.criterion(
-                    pred_y_eval[:, :, :loss_channels, ...],
-                    batch_y_eval[:, :, :loss_channels, ...],
-                ).cpu().numpy()
-                for k in eval_res.keys():
-                    eval_res[k] = eval_res[k].reshape(1)
-                results.append(eval_res)
-
-            if self.args.empty_cache:
-                torch.cuda.empty_cache()
-            if self.rank == 0:
-                prog_bar.update()
-
-        # post gather tensors
-        results_all = {}
-        for k in results[0].keys():
-            results_cat = np.concatenate([batch[k] for batch in results], axis=0)
-            # gether tensors by GPU (it's no need to empty cache)
-            results_gathered = gather_tensors_batch(results_cat, part_size=min(part_size*8, 16))
-            results_strip = np.concatenate(results_gathered, axis=0)[:length]
-            results_all[k] = results_strip
-        results_all = self._merge_spatial_results(results_all, data_loader.dataset, gather_data)
-        return results_all
-
-    def _nondist_forward_collect(self, data_loader, length=None, gather_data=False):
+    def _nondist_forward_collect(self, data_loader, length=None):
         """Forward and collect predictios.
 
         Args:
             data_loader: dataloader of evaluation.
             length (int): Expected length of output arrays.
-            gather_data (bool): Whether to gather raw predictions and inputs.
 
         Returns:
             results_all (dict(np.ndarray)): The concatenated outputs.
         """
         # preparation
+        dataset = data_loader.dataset
         results = []
         prog_bar = ProgressBar(len(data_loader))
-        length = len(data_loader.dataset) if length is None else length
-
-        # loop
-        for idx, (batch_x, batch_y) in enumerate(data_loader):
+        length = len(dataset) if length is None else length
+        # collect all patch-level outputs first, then merge them after the full pass
+        for batch_x, batch_y in data_loader:
             with torch.no_grad():
                 batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
                 pred_y = self._predict(batch_x, batch_y)
@@ -223,61 +114,33 @@ class Base_method(object):
                     f"Loss expects at least {loss_channels} channels, got "
                     f"{pred_y_eval.shape[2]} (pred) and {batch_y_eval.shape[2]} (true)."
                 )
-            if gather_data:  # return raw datas
-                loss_value = self.criterion(
-                    pred_y_eval[:, :, :loss_channels, ...],
-                    batch_y_eval[:, :, :loss_channels, ...],
-                ).detach().cpu().numpy().reshape(1)
-                results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
-                                        [batch_x_eval.cpu().numpy(), pred_y_eval.cpu().numpy(), batch_y_eval.cpu().numpy(), loss_value])))
-            else:  # evaluation-only path when we do not need to store raw tensors
-                pred_eval = pred_y_eval.cpu().numpy()
-                true_eval = batch_y_eval.cpu().numpy()
-                save_channels = getattr(self.args, "save_channels", None)
-                if save_channels is not None:
-                    if pred_eval.shape[2] < save_channels or true_eval.shape[2] < save_channels:
-                        raise ValueError(
-                            f"Metrics expect at least {save_channels} channels, got "
-                            f"{pred_eval.shape[2]} (pred) and {true_eval.shape[2]} (true)."
-                        )
-                    pred_eval = pred_eval[:, :, :save_channels, ...]
-                    true_eval = true_eval[:, :, :save_channels, ...]
-                eval_res, _ = metric(pred_eval, true_eval,
-                                     data_loader.dataset.mean, data_loader.dataset.std,
-                                     metrics=self.metric_list, spatial_norm=self.spatial_norm, return_log=False)
-                eval_res['loss'] = self.criterion(
-                    pred_y_eval[:, :, :loss_channels, ...],
-                    batch_y_eval[:, :, :loss_channels, ...],
-                ).cpu().numpy()
-                for k in eval_res.keys():
-                    eval_res[k] = eval_res[k].reshape(1)
-                results.append(eval_res)
+            loss_value = self.criterion(
+                pred_y_eval[:, :, :loss_channels, ...],
+                batch_y_eval[:, :, :loss_channels, ...],
+            ).detach().cpu().numpy().reshape(1)
+            results.append(dict(zip(['inputs', 'preds', 'trues', 'loss'],
+                                    [batch_x_eval.cpu().numpy(), pred_y_eval.cpu().numpy(), batch_y_eval.cpu().numpy(), loss_value])))
 
             prog_bar.update()
             if self.args.empty_cache:
                 torch.cuda.empty_cache()
 
-        # post gather tensors
         results_all = {}
         for k in results[0].keys():
             results_all[k] = np.concatenate([batch[k] for batch in results], axis=0)
-        results_all = self._merge_spatial_results(results_all, data_loader.dataset, gather_data)
+        results_all = self._merge_spatial_results(results_all, dataset)
         return results_all
 
-    def _merge_spatial_results(self, results_all, dataset, gather_data):
+    def _merge_spatial_results(self, results_all, dataset):
         """Reconstruct full-frame samples from spatially split patches.
 
         Args:
             results_all (dict): Concatenated outputs from the dataloader.
             dataset: Dataset instance that may contain spatial split metadata.
-            gather_data (bool): Whether raw predictions were gathered.
 
         Returns:
             dict: Potentially merged results with full-frame tensors and updated loss/metrics.
         """
-        if not gather_data:
-            return results_all
-
         if not getattr(dataset, 'use_space', False):
             return results_all
 
@@ -338,7 +201,7 @@ class Base_method(object):
 
         return results_all
 
-    def vali_one_epoch(self, runner, vali_loader, gather_data=False, **kwargs):
+    def vali_one_epoch(self, runner, vali_loader, **kwargs):
         """Evaluate the model with val_loader.
 
         Args:
@@ -351,43 +214,32 @@ class Base_method(object):
         """
         self.model.eval()
         dataset = vali_loader.dataset
-        should_gather = gather_data or getattr(dataset, 'use_space', False)
-        if self.dist and self.world_size > 1:
-            results = self._dist_forward_collect(vali_loader, len(dataset), gather_data=should_gather)
-        else:
-            results = self._nondist_forward_collect(vali_loader, len(dataset), gather_data=should_gather)
+        results = self._nondist_forward_collect(vali_loader, len(dataset))
 
         eval_log = ""
-        
-        if should_gather:
-            save_channels = getattr(self.args, "save_channels", None)
-            preds_eval = results['preds']
-            trues_eval = results['trues']
-            if save_channels is not None:
-                if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
-                    raise ValueError(
-                        f"Metrics expect at least {save_channels} channels, got "
-                        f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
-                    )
-                preds_eval = preds_eval[:, :, :save_channels, ...]
-                trues_eval = trues_eval[:, :, :save_channels, ...]
-            eval_res, eval_log = metric(preds_eval, trues_eval,
-                                        dataset.mean, dataset.std,
-                                        metrics=self.metric_list, spatial_norm=self.spatial_norm)
-            for k in self.metric_list:
-                results[k] = np.array(eval_res[k]).reshape(1)
-            results['metrics'] = np.array([eval_res['mae'], eval_res['mse'], eval_res['rmse'], eval_res['mape']])
-            results['metric_dict'] = eval_res
-        else:
-            for k, v in results.items():
-                if k != "loss":
-                    v = v.mean()
-                    eval_str = f"{k}:{v.mean()}" if len(eval_log) == 0 else f", {k}:{v.mean()}"
-                    eval_log += eval_str
+
+        save_channels = getattr(self.args, "save_channels", None)
+        preds_eval = results['preds']
+        trues_eval = results['trues']
+        if save_channels is not None:
+            if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
+                raise ValueError(
+                    f"Metrics expect at least {save_channels} channels, got "
+                    f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
+                )
+            preds_eval = preds_eval[:, :, :save_channels, ...]
+            trues_eval = trues_eval[:, :, :save_channels, ...]
+        eval_res, eval_log = metric(preds_eval, trues_eval,
+                                    dataset.mean, dataset.std,
+                                    metrics=self.metric_list, spatial_norm=self.spatial_norm)
+        for k in self.metric_list:
+            results[k] = np.array(eval_res[k]).reshape(1)
+        results['metrics'] = np.array([eval_res['mae'], eval_res['mse'], eval_res['rmse'], eval_res['mape']])
+        results['metric_dict'] = eval_res
 
         return results, eval_log
 
-    def test_one_epoch(self, runner, test_loader, gather_data=True, **kwargs):
+    def test_one_epoch(self, runner, test_loader, **kwargs):
         """Evaluate the model with test_loader.
 
         Args:
@@ -399,41 +251,27 @@ class Base_method(object):
         """
         self.model.eval()
         dataset = test_loader.dataset
-        should_gather = gather_data or getattr(dataset, 'use_space', False)
-
-        if self.dist and self.world_size > 1:
-            results = self._dist_forward_collect(test_loader, len(dataset), gather_data=should_gather)
-        else:
-            results = self._nondist_forward_collect(test_loader, len(dataset), gather_data=should_gather)
+        results = self._nondist_forward_collect(test_loader, len(dataset))
             
         eval_log = ""
-        if should_gather:
-            save_channels = getattr(self.args, "save_channels", None)
-            preds_eval = results['preds']
-            trues_eval = results['trues']
-            if save_channels is not None:
-                if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
-                    raise ValueError(
-                        f"Metrics expect at least {save_channels} channels, got "
-                        f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
-                    )
-                preds_eval = preds_eval[:, :, :save_channels, ...]
-                trues_eval = trues_eval[:, :, :save_channels, ...]
-            eval_res, eval_log = metric(preds_eval, trues_eval,
-                                        dataset.mean, dataset.std,
-                                        metrics=self.metric_list, spatial_norm=self.spatial_norm)
-            for k in self.metric_list:
-                results[k] = np.array(eval_res[k]).reshape(1)
-            results['metrics'] = np.array([eval_res['mae'], eval_res['mse'], eval_res['rmse'], eval_res['mape']])
-            results['metric_dict'] = eval_res
-        else:
-            for k, v in results.items():
-                if k in {"inputs", "preds", "trues"}:
-                    continue
-                if k != "loss":
-                    v = v.mean()
-                    eval_str = f"{k}:{v.mean()}" if len(eval_log) == 0 else f", {k}:{v.mean()}"
-                    eval_log += eval_str
+        save_channels = getattr(self.args, "save_channels", None)
+        preds_eval = results['preds']
+        trues_eval = results['trues']
+        if save_channels is not None:
+            if preds_eval.shape[2] < save_channels or trues_eval.shape[2] < save_channels:
+                raise ValueError(
+                    f"Metrics expect at least {save_channels} channels, got "
+                    f"{preds_eval.shape[2]} (pred) and {trues_eval.shape[2]} (true)."
+                )
+            preds_eval = preds_eval[:, :, :save_channels, ...]
+            trues_eval = trues_eval[:, :, :save_channels, ...]
+        eval_res, eval_log = metric(preds_eval, trues_eval,
+                                    dataset.mean, dataset.std,
+                                    metrics=self.metric_list, spatial_norm=self.spatial_norm)
+        for k in self.metric_list:
+            results[k] = np.array(eval_res[k]).reshape(1)
+        results['metrics'] = np.array([eval_res['mae'], eval_res['mse'], eval_res['rmse'], eval_res['mape']])
+        results['metric_dict'] = eval_res
 
         results['eval_log'] = eval_log
         

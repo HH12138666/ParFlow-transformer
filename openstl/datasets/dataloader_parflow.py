@@ -7,7 +7,6 @@ import random
 from typing import Optional
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb
@@ -26,7 +25,7 @@ EPS = 1e-8
 NORMALIZE = True
 NORMALIZE_TARGET = True
 STATS_PATH = '/home/huanghui/data/ParFlow-transformer/stats'   
-STATS_NAME = 'stats_0.75_wtd_evap_static.npz'    
+STATS_NAME = 'stats_0.75_press_evap_static.npz'    
 STATS_PATH = os.path.join(STATS_PATH, STATS_NAME)         
 #是否拼接 static 数据
 USE_STATIC = True
@@ -35,15 +34,6 @@ EVAP_CHANNELS = [6, 7, 8, 9]
 
 #数据分割相关设置
 time_stride = 5    # 时间步长，用于数据分割
-
-
-def _compute_patch_padding(height, width, patch_size):
-    if patch_size is None or patch_size <= 0:
-        return 0, 0
-    pad_h = (patch_size - height % patch_size) % patch_size
-    pad_w = (patch_size - width % patch_size) % patch_size
-    return pad_h, pad_w
-
 def _natural_key(p):
     b = os.path.basename(p)
     s = re.split(r'(\d+)', b)
@@ -314,7 +304,6 @@ class ParFlowDataset(Dataset):
                 press_files = None,
                 evap_files = None,
                 patch_size = None,
-                pad_to_patch = False,
                 split_mode = 'ratio',
                 train_years = None,
                 holdout_years = None,
@@ -344,7 +333,6 @@ class ParFlowDataset(Dataset):
         self.out_channels = out_channels  # 仅用于标签 y，输入 x 仍保留全部通道
         self.align_by_hour_id = align_by_hour_id
         self.patch_size = patch_size
-        self.pad_to_patch = bool(pad_to_patch)
         self.split_mode = str(split_mode).lower()
         self.train_years = _normalize_years(train_years)
         self.holdout_years = _normalize_years(holdout_years)
@@ -391,11 +379,8 @@ class ParFlowDataset(Dataset):
 
         self.valid_h = self.space_h if self.use_space else self.H
         self.valid_w = self.space_w if self.use_space else self.W
-        self.pad_h, self.pad_w = (0, 0)
-        if self.pad_to_patch:
-            self.pad_h, self.pad_w = _compute_patch_padding(self.valid_h, self.valid_w, self.patch_size)
-        self.padded_h = self.valid_h + self.pad_h
-        self.padded_w = self.valid_w + self.pad_w
+        self.padded_h = self.valid_h
+        self.padded_w = self.valid_w
 
         self.time_indices = self._build_time_indices()
         
@@ -522,12 +507,6 @@ class ParFlowDataset(Dataset):
             out[i] = torch.from_numpy(arr)
         return out
 
-    def _pad_tensor(self, tensor):
-        if self.pad_h == 0 and self.pad_w == 0:
-            return tensor
-        pad = (0, self.pad_w, 0, self.pad_h)
-        return F.pad(tensor, pad, mode='replicate')
-
     def __getitem__(self, idx):
 
         if self.use_space:
@@ -554,10 +533,6 @@ class ParFlowDataset(Dataset):
                 else:
                     y = y.sub(self.mean_t).div(self.std_eps_t)
 
-        if self.pad_to_patch:
-            x = self._pad_tensor(x)
-            y = self._pad_tensor(y)
-
         return x, y
 
 
@@ -567,7 +542,6 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
               static_data = None,
               align_by_hour_id = False,
               patch_size = None,
-              pad_to_patch = False,
               split_mode = 'ratio',
               train_years = None,
               holdout_years = None,
@@ -592,7 +566,7 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
         evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
         align_by_hour_id=align_by_hour_id,press_files=all_press_files,evap_files=all_evap_files,
-        patch_size=patch_size,pad_to_patch=pad_to_patch,
+        patch_size=patch_size,
         split_mode=split_mode,train_years=train_years,holdout_years=holdout_years,
         val_ratio_in_holdout=val_ratio_in_holdout,)
     
@@ -601,7 +575,7 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
         evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
         align_by_hour_id=align_by_hour_id,press_files=all_press_files,evap_files=all_evap_files,
-        patch_size=patch_size,pad_to_patch=pad_to_patch,
+        patch_size=patch_size,
         split_mode=split_mode,train_years=train_years,holdout_years=holdout_years,
         val_ratio_in_holdout=val_ratio_in_holdout,)
     
@@ -610,7 +584,7 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
         space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
         evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
         align_by_hour_id=align_by_hour_id,press_files=all_press_files,evap_files=all_evap_files,
-        patch_size=patch_size,pad_to_patch=pad_to_patch,
+        patch_size=patch_size,
         split_mode=split_mode,train_years=train_years,holdout_years=holdout_years,
         val_ratio_in_holdout=val_ratio_in_holdout,)
 

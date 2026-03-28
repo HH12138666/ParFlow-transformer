@@ -3,7 +3,11 @@ from torch import optim
 
 from timm.scheduler.cosine_lr import CosineLRScheduler
 
-from .optim_constant import optim_parameters
+OPTIM_DEFAULTS = {
+    'adamw': {
+        'weight_decay': 0.01,
+    },
+}
 
 
 
@@ -64,7 +68,7 @@ def get_optim_scheduler(args, epoch, model, steps_per_epoch):
     else:
         parameters = model.parameters()
 
-    opt_args = optim_parameters.get(opt_lower, dict())
+    opt_args = OPTIM_DEFAULTS.get(opt_lower, dict())
     opt_args.update(lr=args.lr, weight_decay=weight_decay)
     if hasattr(args, 'opt_eps') and args.opt_eps is not None:
         opt_args['eps'] = args.opt_eps
@@ -78,7 +82,6 @@ def get_optim_scheduler(args, epoch, model, steps_per_epoch):
     optimizer = optim.AdamW(parameters, **opt_args)
 
     sched_lower = args.sched.lower()
-    total_steps = epoch * steps_per_epoch
     by_epoch = True
     if sched_lower == 'cosine':
         lr_scheduler = CosineLRScheduler(

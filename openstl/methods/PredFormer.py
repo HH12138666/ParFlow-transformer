@@ -6,7 +6,6 @@ from timm.utils import AverageMeter
 import torch.nn.functional as F
 
 from openstl.models import PredFormer_Model
-from openstl.utils import reduce_tensor
 from .base_method import Base_method
 
 class PredFormer(Base_method):
@@ -119,8 +118,7 @@ class PredFormer(Base_method):
                     batch_y_loss[:, :, :loss_channels, ...],
                 )
 
-            if not self.dist:
-                losses_m.update(loss.item(), batch_x.size(0))
+            losses_m.update(loss.item(), batch_x.size(0))
 
             if self.loss_scaler is not None:
                 if torch.any(torch.isnan(loss)) or torch.any(torch.isinf(loss)):
@@ -136,10 +134,6 @@ class PredFormer(Base_method):
 
             torch.cuda.synchronize()
             num_updates += 1
-
-            if self.dist:
-                losses_m.update(reduce_tensor(loss), batch_x.size(0))
-
 
             if not self.by_epoch:
                 self.scheduler.step()

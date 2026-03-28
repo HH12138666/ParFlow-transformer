@@ -8,12 +8,10 @@ import sys
 import warnings
 import numpy as np
 from collections import defaultdict, OrderedDict
-from typing import Tuple
 
 import torch
 import torchvision
 import torch.multiprocessing as mp
-from torch import distributed as dist
 
 import openstl
 from .config_utils import Config
@@ -243,80 +241,8 @@ def weights_to_cpu(state_dict: OrderedDict) -> OrderedDict:
     return state_dict_cpu
 
 
-def init_dist(launcher: str, backend: str = 'nccl', **kwargs) -> None:
-    if mp.get_start_method(allow_none=True) is None:
-        mp.set_start_method('spawn')
-    if launcher == 'pytorch':
-        _init_dist_pytorch(backend, **kwargs)
-    elif launcher == 'mpi':
-        _init_dist_mpi(backend, **kwargs)
-    else:
-        raise ValueError(f'Invalid launcher type: {launcher}')
-
-
 def init_random_seed(seed=None, device='cuda'):
-    """Initialize random seed.
-
-    If the seed is not set, the seed will be automatically randomized,
-    and then broadcast to all processes to prevent some potential bugs.
-    Args:
-        seed (int, Optional): The seed. Default to None.
-        device (str): The device where the seed will be put on.
-            Default to 'cuda'.
-    Returns:
-        int: Seed to be used.
-    """
+    """Initialize random seed for single-process training."""
     if seed is not None:
         return seed
-
-    # Make sure all ranks share the same random seed to prevent
-    # some potential bugs. Please refer to
-    # https://github.com/open-mmlab/mmdetection/issues/6339
-    rank, world_size = get_dist_info()
-    seed = np.random.randint(2**31)
-    if world_size == 1:
-        return seed
-
-    if rank == 0:
-        random_num = torch.tensor(seed, dtype=torch.int32, device=device)
-    else:
-        random_num = torch.tensor(0, dtype=torch.int32, device=device)
-    dist.broadcast(random_num, src=0)
-    return random_num.item()
-
-
-def _init_dist_pytorch(backend: str, **kwargs) -> None:
-    # TODO: use local_rank instead of rank % num_gpus
-    rank = int(os.environ['RANK'])
-    num_gpus = torch.cuda.device_count()
-    torch.cuda.set_device(rank % num_gpus)
-    dist.init_process_group(backend=backend, **kwargs)
-
-
-def _init_dist_mpi(backend: str, **kwargs) -> None:
-    local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
-    torch.cuda.set_device(local_rank)
-    if 'MASTER_PORT' not in os.environ:
-        # 29500 is torch.distributed default port
-        os.environ['MASTER_PORT'] = '29500'
-    if 'MASTER_ADDR' not in os.environ:
-        raise KeyError('The environment variable MASTER_ADDR is not set')
-    os.environ['WORLD_SIZE'] = os.environ['OMPI_COMM_WORLD_SIZE']
-    os.environ['RANK'] = os.environ['OMPI_COMM_WORLD_RANK']
-    dist.init_process_group(backend=backend, **kwargs)
-
-
-def get_dist_info() -> Tuple[int, int]:
-    if dist.is_available() and dist.is_initialized():
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-    else:
-        rank = 0
-        world_size = 1
-    return rank, world_size
-
-
-def reduce_tensor(tensor):
-    rt = tensor.data.clone()
-    dist.all_reduce(rt.div_(dist.get_world_size()), op=dist.ReduceOp.SUM)
-    return rt
+    return np.random.randint(2**31)

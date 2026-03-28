@@ -12,15 +12,7 @@ def _collect_kwargs(kwargs, defaults):
     return {k: kwargs.get(k, v) for k, v in defaults.items()}
 
 
-def _resolve_pad_to_patch(kwargs, model_cfg):
-    """Preserve existing precedence: explicit True in kwargs wins."""
-    pad_to_patch = kwargs.get('pad_to_patch', False)
-    if not pad_to_patch and isinstance(model_cfg, dict):
-        pad_to_patch = model_cfg.get('pad_to_patch', False)
-    return pad_to_patch
-
-
-def _build_parflow_loader_cfg(kwargs, model_cfg, dist):
+def _build_parflow_loader_cfg(kwargs, model_cfg):
     direct_defaults = {
         'pre_seq_length': 12,
         'aft_seq_length': 12,
@@ -35,11 +27,8 @@ def _build_parflow_loader_cfg(kwargs, model_cfg, dist):
         'align_by_hour_id': True,
     }
     cfg = _collect_kwargs(kwargs, direct_defaults)
-    cfg['distributed'] = dist
-
     cfg['out_channels'] = _get_cfg_value(kwargs, model_cfg, 'out_channels', None)
     cfg['patch_size'] = _get_cfg_value(kwargs, model_cfg, 'patch_size', None)
-    cfg['pad_to_patch'] = _resolve_pad_to_patch(kwargs, model_cfg)
 
     cfg['split_mode'] = _get_cfg_value(kwargs, model_cfg, 'split_mode', 'ratio')
     cfg['train_years'] = _get_cfg_value(kwargs, model_cfg, 'train_years', None)
@@ -51,9 +40,9 @@ def _build_parflow_loader_cfg(kwargs, model_cfg, dist):
     return cfg
 
 
-def load_data(dataname, batch_size, val_batch_size, num_workers, data_root, dist=False, **kwargs):
+def load_data(dataname, batch_size, val_batch_size, num_workers, data_root, **kwargs):
     model_cfg = kwargs.get('model_config', {})
-    cfg_dataloader = _build_parflow_loader_cfg(kwargs, model_cfg, dist)
+    cfg_dataloader = _build_parflow_loader_cfg(kwargs, model_cfg)
 
     if dataname != 'parflow':
         raise ValueError(f'Dataname {dataname} is unsupported')
