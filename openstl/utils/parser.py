@@ -4,6 +4,17 @@ def parse_list(arg):
     return [int(x) for x in arg.strip('[]').split(',')]
 
 
+def parse_bool(arg):
+    if isinstance(arg, bool):
+        return arg
+    v = str(arg).strip().lower()
+    if v in ('1', 'true', 't', 'yes', 'y'):
+        return True
+    if v in ('0', 'false', 'f', 'no', 'n'):
+        return False
+    raise argparse.ArgumentTypeError(f'Invalid boolean value: {arg}')
+
+
 def create_parser():
     parser = argparse.ArgumentParser(
         description='OpenSTL train/test a model')
@@ -29,6 +40,16 @@ def create_parser():
     parser.add_argument('--inference', '-i', action='store_true', default=False, help='Only performs inference')
     parser.add_argument('--deterministic', action='store_true', default=False,
                         help='whether to set deterministic options for CUDNN backend (reproducable)')
+    parser.add_argument('--launcher', default='none', type=str, choices=['none', 'pytorch'],
+                        help='Job launcher for distributed training')
+    parser.add_argument('--local_rank', default=0, type=int,
+                        help='Local rank passed by torchrun')
+    parser.add_argument('--port', default=29500, type=int,
+                        help='Port used by torch distributed')
+    parser.add_argument('--find_unused_parameters', action='store_true', default=False,
+                        help='Whether to enable DDP unused parameter detection')
+    parser.add_argument('--broadcast_buffers', action='store_true', default=False,
+                        help='Whether DDP should broadcast buffers during forward')
 
     # dataset parameters
     parser.add_argument('--batch_size', '-b', default=10, type=int, help='Training batch size')
@@ -49,14 +70,6 @@ def create_parser():
                         help='Whether to drop the last batch in the val data loading')
     parser.add_argument('--static_data', type=str, default=None,
                         help='Comma-separated keywords to select static .pfb files (case-insensitive)')
-    parser.add_argument('--align_by_hour_id', action='store_true', default=True,
-                        help='Align press/evap files by hour id parsed from filenames')
-    parser.add_argument('--use_true_evap', action='store_true', default=True,
-                        help='Use true evap channels during autoregressive rollout')
-    parser.add_argument('--loss_channels', type=int, default=10,
-                        help='Number of leading channels used to compute loss (e.g., 10 for press, 14 for press+evap)')
-    parser.add_argument('--save_channels', type=int, default=10,
-                        help='Number of leading channels saved for inputs/trues/preds during training/validation')
     
     # ParFlow tiling parameters
     parser.add_argument('--space_h', default=None, type=int, help='Spatial crop height for ParFlow tiling')
@@ -73,10 +86,14 @@ def create_parser():
                         help='Validation fraction inside each holdout year')
     parser.add_argument('--var_name', default='press', type=str,
                         help='Primary dynamic variable folder name under data_root (e.g., press or wtd)')
-    parser.add_argument('--use_evap', default=True, type=bool,
+    parser.add_argument('--use_evap', default=True, type=parse_bool,
                         help='Whether to read and concatenate evaptrans channels')
-    parser.add_argument('--use_static_input', default=True, type=bool,
+    parser.add_argument('--use_apcp', default=False, type=parse_bool,
+                        help='Whether to read and concatenate APCP channels')
+    parser.add_argument('--use_static_input', default=True, type=parse_bool,
                         help='Whether to read and concatenate static channels')
+    parser.add_argument('--stats_path', default=None, type=str,
+                        help='Path to stats npz file used for normalization')
 
     # method parameters
     parser.add_argument('--method', '-m', default='predformer', type=str,
@@ -168,6 +185,11 @@ def default_parser():
         'test': False,
         'inference': False,
         'deterministic': False,
+        'launcher': 'none',
+        'local_rank': 0,
+        'port': 29500,
+        'find_unused_parameters': False,
+        'broadcast_buffers': False,
         
         # dataset parameters
         'batch_size': 16,
@@ -182,10 +204,6 @@ def default_parser():
         'use_prefetcher': False,
         'drop_last': False,
         'static_data': None,
-        'align_by_hour_id': True,
-        'use_true_evap': True,
-        'loss_channels': 10,
-        'save_channels': 10,
         
         # ParFlow tiling parameters
         'space_h': None,  
@@ -198,7 +216,9 @@ def default_parser():
         'val_ratio_in_holdout': 0.25,
         'var_name': 'press',
         'use_evap': True,
+        'use_apcp': False,
         'use_static_input': True,
+        'stats_path': None,
              
         # method parameters
         'method': 'predformer',

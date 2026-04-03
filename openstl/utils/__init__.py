@@ -1,5 +1,6 @@
 from .collect import nondist_forward_collect
 from .config_utils import Config, check_file_exist
+from .dist_utils import init_dist, get_dist_info, is_main_process, barrier, destroy_dist
 from .main_utils import (set_seed, setup_multi_processes, print_log, output_namespace,
                          collect_env, check_dir, get_dataset, count_parameters, measure_throughput,
                          load_config, update_config, weights_to_cpu,
@@ -13,6 +14,7 @@ __all__ = [
     'Config', 'check_file_exist', 'create_parser', 'default_parser',
     'set_seed', 'setup_multi_processes', 'print_log', 'output_namespace', 'collect_env', 'check_dir',
     'get_dataset', 'count_parameters', 'measure_throughput', 'load_config', 'update_config', 'weights_to_cpu',
+    'init_dist', 'get_dist_info', 'is_main_process', 'barrier', 'destroy_dist',
     'init_random_seed',
     'reserve_schedule_sampling_exp', 'schedule_sampling', 'reshape_patch', 'reshape_patch_back',
     'LapLoss', 'MeanShift', 'VGGPerceptualLoss','shaploss',

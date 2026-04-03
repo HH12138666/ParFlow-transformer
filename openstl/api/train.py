@@ -7,10 +7,12 @@ import numpy as np
 from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 import torch
-from openstl.core import metric, Recorder
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from openstl.core import Recorder
 from openstl.methods import method_maps
 from openstl.utils import (set_seed, print_log, output_namespace, check_dir, collect_env,
-                           get_dataset, measure_throughput, weights_to_cpu)
+                           get_dataset, measure_throughput, weights_to_cpu, barrier)
 
 
 class BaseExperiment(object):
@@ -29,16 +31,22 @@ class BaseExperiment(object):
         self._max_epochs = self.config['epoch']
         self._max_iters = None
         self._early_stop = self.args.early_stop_epoch
+        self._distributed = getattr(self.args, 'distributed', False)
+        self._rank = getattr(self.args, 'rank', 0)
+        self._world_size = getattr(self.args, 'world_size', 1)
         self._preparation(dataloaders)
         print_log(output_namespace(self.args))
-        if not self.args.no_display_method_info:
+        if (not self.args.no_display_method_info) and self._rank == 0:
             self.display_method_info()
 
     def _acquire_device(self):
         """Setup devices"""
         if self.args.use_gpu:
             self._use_gpu = True
-            device = torch.device('cuda:0')
+            if self._distributed:
+                device = torch.device(f'cuda:{self.args.local_rank}')
+            else:
+                device = torch.device('cuda:0')
             print_log(f'Use GPU: {device}')
         else:
             self._use_gpu = False
@@ -60,17 +68,21 @@ class BaseExperiment(object):
         check_dir(self.path)
         check_dir(self.checkpoints_path)
 
-        sv_param = osp.join(self.path, 'model_param.json')
-        with open(sv_param, 'w') as file_obj:
-            json.dump(self.args.__dict__, file_obj)
+        if self._rank == 0:
+            sv_param = osp.join(self.path, 'model_param.json')
+            with open(sv_param, 'w') as file_obj:
+                json.dump(self.args.__dict__, file_obj)
 
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
         timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
         prefix = 'train' if (not self.args.test and not self.args.inference) else 'test'
-        logging.basicConfig(level=logging.INFO,
-                            filename=osp.join(self.path, '{}_{}.log'.format(prefix, timestamp)),
-                            filemode='a', format='%(asctime)s - %(message)s')
+        if self._rank == 0:
+            logging.basicConfig(level=logging.INFO,
+                                filename=osp.join(self.path, '{}_{}.log'.format(prefix, timestamp)),
+                                filemode='a', format='%(asctime)s - %(message)s')
+        else:
+            logging.basicConfig(level=logging.ERROR)
 
         # log env info
         env_info_dict = collect_env()
@@ -94,6 +106,16 @@ class BaseExperiment(object):
     def _build_method(self):
         self.steps_per_epoch = len(self.train_loader)
         self.method = method_maps[self.args.method](self.args, self.device, self.steps_per_epoch)
+        self.method.rank = self._rank
+        self.method.world_size = self._world_size
+        if self._distributed:
+            self.method.model = DDP(
+                self.method.model,
+                device_ids=[self.args.local_rank],
+                output_device=self.args.local_rank,
+                find_unused_parameters=getattr(self.args, 'find_unused_parameters', False),
+                broadcast_buffers=getattr(self.args, 'broadcast_buffers', False),
+            )
         self.method.model.eval()
 
     def _get_data(self, dataloaders=None):
@@ -110,10 +132,13 @@ class BaseExperiment(object):
 
     def _save(self, name=''):
         """Saving models and meta data to checkpoints"""
+        if self._rank != 0:
+            return
+        model_to_save = self.method.model.module if hasattr(self.method.model, 'module') else self.method.model
         checkpoint = {
             'epoch': self._epoch + 1,
             'optimizer': self.method.model_optim.state_dict(),
-            'state_dict': weights_to_cpu(self.method.model.state_dict()),
+            'state_dict': weights_to_cpu(model_to_save.state_dict()),
             'scheduler': self.method.scheduler.state_dict()}
         torch.save(checkpoint, osp.join(self.checkpoints_path, name + '.pth'))
 
@@ -121,7 +146,7 @@ class BaseExperiment(object):
         """Loading models from the checkpoint"""
         filename = name if osp.isfile(name) else osp.join(self.checkpoints_path, name + '.pth')
         try:
-            checkpoint = torch.load(filename)
+            checkpoint = torch.load(filename, map_location=self.device)
         except:
             return
         # OrderedDict is a subclass of dict
@@ -134,38 +159,12 @@ class BaseExperiment(object):
             self.method.scheduler.load_state_dict(checkpoint['scheduler'])
 
     def _load_from_state_dict(self, state_dict):
-        self.method.model.load_state_dict(state_dict)
+        model_to_load = self.method.model.module if hasattr(self.method.model, 'module') else self.method.model
+        model_to_load.load_state_dict(state_dict)
 
     def _load_best_checkpoint(self):
         best_model_path = osp.join(self.path, 'checkpoint.pth')
-        self._load_from_state_dict(torch.load(best_model_path))
-
-    def _slice_eval_channels(self, preds, trues, save_channels=None):
-        if save_channels is None:
-            return preds, trues
-        if preds.shape[2] < save_channels or trues.shape[2] < save_channels:
-            raise ValueError(
-                f"Metrics expect at least {save_channels} channels, got "
-                f"{preds.shape[2]} (pred) and {trues.shape[2]} (true)."
-            )
-        return preds[:, :, :save_channels, ...], trues[:, :, :save_channels, ...]
-
-    def _compute_eval_results(self, results, data_loader, save_channels=None):
-        metric_list, spatial_norm, channel_names = self.args.metrics, True, None
-        preds_eval, trues_eval = self._slice_eval_channels(
-            results['preds'], results['trues'], save_channels=save_channels
-        )
-        eval_res, eval_log = metric(
-            preds_eval,
-            trues_eval,
-            data_loader.dataset.mean,
-            data_loader.dataset.std,
-            metrics=metric_list,
-            channel_names=channel_names,
-            spatial_norm=spatial_norm
-        )
-        results['metrics'] = np.array([eval_res['mae'], eval_res['mse'], eval_res['rmse'], eval_res['mape']])
-        return eval_res, eval_log
+        self._load_from_state_dict(torch.load(best_model_path, map_location=self.device))
 
     def display_method_info(self):
         """Plot the basic infomation of supported methods"""
@@ -191,11 +190,11 @@ class BaseExperiment(object):
             raise ValueError(f'Invalid method name {self.args.method}')
 
         dash_line = '-' * 80 + '\n'
-        info = self.method.model.__repr__()
-        flops = FlopCountAnalysis(self.method.model, input_dummy)
+        info = model_ref.__repr__()
+        flops = FlopCountAnalysis(model_ref, input_dummy)
         flops = flop_count_table(flops)
         if self.args.fps:
-            fps = measure_throughput(self.method.model, input_dummy)
+            fps = measure_throughput(model_ref, input_dummy)
             fps = 'Throughputs of {}: {:.3f}\n'.format(self.args.method, fps)
         else:
             fps = ''
@@ -208,21 +207,29 @@ class BaseExperiment(object):
         num_updates = self._epoch * self.steps_per_epoch
         early_stop = False
         for epoch in range(self._epoch, self._max_epochs):
+            if self._distributed and hasattr(self.train_loader, 'sampler') and hasattr(self.train_loader.sampler, 'set_epoch'):
+                self.train_loader.sampler.set_epoch(epoch)
             num_updates, loss_mean = self.method.train_one_epoch(
                 self, self.train_loader, epoch, num_updates
             )
 
             self._epoch = epoch
             if epoch % self.args.log_step == 0:
-                cur_lr = self.method.current_lr()
-                cur_lr = sum(cur_lr) / len(cur_lr)
-                with torch.no_grad():
-                    vali_loss = self.vali()
+                if self._rank == 0:
+                    cur_lr = self.method.current_lr()
+                    cur_lr = sum(cur_lr) / len(cur_lr)
+                    with torch.no_grad():
+                        vali_loss = self.vali()
 
-                print_log('Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | Vali Loss: {4:.7f}\n'.format(
-                    epoch + 1, len(self.train_loader), cur_lr, loss_mean.avg, vali_loss))
-                early_stop = recorder(vali_loss, self.method.model, self.path)
-                self._save(name='latest')
+                    print_log('Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | Vali Loss: {4:.7f}\n'.format(
+                        epoch + 1, len(self.train_loader), cur_lr, loss_mean.avg, vali_loss))
+                    early_stop = recorder(vali_loss, self.method.model, self.path)
+                    self._save(name='latest')
+
+                if self._distributed:
+                    stop_tensor = torch.tensor(int(early_stop), device=self.device)
+                    dist.broadcast(stop_tensor, src=0)
+                    early_stop = bool(stop_tensor.item())
 
                     
             if self._use_gpu and self.args.empty_cache:
@@ -232,8 +239,12 @@ class BaseExperiment(object):
                 print_log('Early stop training at {} epoch'.format(epoch + 1))
                 break
             
+        if self._distributed:
+            barrier()
         if not check_dir(self.path):  # exit training when work_dir is removed
             assert False and "Exit training because work_dir is removed"
+        if self._distributed and hasattr(self.method.model, 'module'):
+            self.method.model = self.method.model.module
         self._load_best_checkpoint()
         time.sleep(1)  # wait for asynchronous loggers to flush
 
@@ -249,7 +260,7 @@ class BaseExperiment(object):
 
         val_msg = f"val_timing\tforward_collect={t1 - t0:.2f}s"
         print_log(val_msg)
-        results['metrics'] = np.array([eval_res['mae'], eval_res['mse'],eval_res['rmse'], eval_res['mape']])
+        results['metrics'] = np.array([eval_res[k] for k in self.method.metric_list], dtype=np.float32)
         
         print_log('val\t '+eval_log)
 

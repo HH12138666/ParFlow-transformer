@@ -15,6 +15,7 @@ import torch.multiprocessing as mp
 
 import openstl
 from .config_utils import Config
+from .dist_utils import is_main_process
 import time
 
 
@@ -122,6 +123,8 @@ def collect_env():
 
 
 def print_log(message):
+    if not is_main_process():
+        return
     print(message)
     logging.info(message)
 
@@ -137,7 +140,7 @@ def output_namespace(namespace):
 def check_dir(path):
     if not os.path.exists(path):
         time.sleep(10)  # 确保文件系统有时间处理请求
-        os.makedirs(path)
+        os.makedirs(path, exist_ok=True)
         return False
     return True
 

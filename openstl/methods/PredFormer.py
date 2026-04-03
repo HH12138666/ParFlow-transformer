@@ -35,30 +35,6 @@ class PredFormer(Base_method):
         aux = prev_seq[:, :, out_ch:input_ch, :, :]
         return torch.cat([pred, aux], dim=2)
 
-    def _replace_evap_with_true(self, pred_block, batch_y, step_idx):
-        if not getattr(self.args, "use_true_evap", False):
-            return pred_block
-        if batch_y is None:
-            raise ValueError("use_true_evap requires batch_y for alignment.")
-        loss_channels = getattr(self.args, "loss_channels", None)
-        if loss_channels is None or pred_block.shape[2] <= loss_channels:
-            return pred_block
-        start = step_idx * self.args.pre_seq_length
-        end = start + self.args.pre_seq_length
-        if batch_y.shape[1] < end:
-            raise ValueError(
-                f"batch_y length {batch_y.shape[1]} is shorter than required {end} steps."
-            )
-        if batch_y.shape[2] < pred_block.shape[2]:
-            raise ValueError(
-                f"batch_y channels {batch_y.shape[2]} are fewer than pred channels {pred_block.shape[2]}."
-            )
-        out = pred_block.clone()
-        out[:, :, loss_channels:pred_block.shape[2], ...] = batch_y[
-            :, start:end, loss_channels:pred_block.shape[2], ...
-        ]
-        return out
-
     def _predict(self, batch_x, batch_y=None, **kwargs):
         """Forward the model"""
         if self.args.aft_seq_length == self.args.pre_seq_length:
@@ -72,11 +48,10 @@ class PredFormer(Base_method):
             m = self.args.aft_seq_length % self.args.pre_seq_length
             
             cur_seq = batch_x.clone()
-            for step_idx in range(d):
+            for _ in range(d):
                 pred_block = self.model(cur_seq)
                 pred_y.append(pred_block)
-                next_block = self._replace_evap_with_true(pred_block, batch_y, step_idx)
-                cur_seq = self._merge_pred_with_aux(next_block, cur_seq)
+                cur_seq = self._merge_pred_with_aux(pred_block, cur_seq)
 
             if m != 0:
                 pred_block = self.model(cur_seq)
@@ -105,17 +80,16 @@ class PredFormer(Base_method):
 
             with self.amp_autocast():
                 pred_y = self._predict(batch_x, batch_y=batch_y)
-                pred_y_loss = self._crop_to_valid_spatial(pred_y)
-                batch_y_loss = self._crop_to_valid_spatial(batch_y)
-                loss_channels = getattr(self.args, "loss_channels", 10)
-                if pred_y_loss.shape[2] < loss_channels or batch_y_loss.shape[2] < loss_channels:
+                pred_y_loss = pred_y
+                batch_y_loss = batch_y
+                if pred_y_loss.shape[2] != batch_y_loss.shape[2]:
                     raise ValueError(
-                        f"Loss expects at least {loss_channels} channels, got "
+                        f"Loss expects matching output channels, got "
                         f"{pred_y_loss.shape[2]} (pred) and {batch_y_loss.shape[2]} (true)."
                     )
                 loss = self.criterion(
-                    pred_y_loss[:, :, :loss_channels, ...],
-                    batch_y_loss[:, :, :loss_channels, ...],
+                    pred_y_loss,
+                    batch_y_loss,
                 )
 
             losses_m.update(loss.item(), batch_x.size(0))

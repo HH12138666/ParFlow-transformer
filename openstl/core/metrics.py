@@ -39,7 +39,7 @@ def MAPE(pred, true, spatial_norm=False, eps=1e-8):
 
 def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
            clip_range=[0, 1], channel_names=None,
-           spatial_norm=True, return_log=True):
+           spatial_norm=True, return_log=True, progress_hook=None):
    
     if mean is not None and std is not None:
 
@@ -59,6 +59,8 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
         
         pred = pred * std + mean
         true = true * std + mean
+        if progress_hook is not None:
+            progress_hook()
     '''
     if mean is not None and std is not None:
         pred = pred * std + mean
@@ -87,6 +89,8 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
                                                      true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
                 mse_sum += eval_res[f'mse_{str(c_name)}']
             eval_res['mse'] = mse_sum / c_group
+        if progress_hook is not None:
+            progress_hook()
 
     if 'mae' in metrics:
         if channel_names is None:
@@ -98,6 +102,8 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
                                                      true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
                 mae_sum += eval_res[f'mae_{str(c_name)}']
             eval_res['mae'] = mae_sum / c_group
+        if progress_hook is not None:
+            progress_hook()
 
     if 'rmse' in metrics:
         if channel_names is None:
@@ -109,6 +115,8 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
                                                        true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
                 rmse_sum += eval_res[f'rmse_{str(c_name)}']
             eval_res['rmse'] = rmse_sum / c_group
+        if progress_hook is not None:
+            progress_hook()
                 
     if 'mape' in metrics:
         if channel_names is None:
@@ -120,6 +128,8 @@ def metric(pred, true, mean=None, std=None, metrics=['mae', 'mse'],
                                                        true[:, :, i*c_width: (i+1)*c_width, ...], spatial_norm)
                 mape_sum += eval_res[f'mape_{str(c_name)}']
             eval_res['mape'] = mape_sum / c_group
+        if progress_hook is not None:
+            progress_hook()
     
     if return_log:
         for k, v in eval_res.items():

@@ -19,16 +19,15 @@ def _build_parflow_loader_cfg(kwargs, model_cfg):
         'use_augment': False,
         'use_prefetcher': False,
         'drop_last': False,
+        'distributed': False,
         'space_h': None,
         'space_w': None,
         'space_stride_h': None,
         'space_stride_w': None,
         'static_data': None,
-        'align_by_hour_id': True,
     }
     cfg = _collect_kwargs(kwargs, direct_defaults)
     cfg['out_channels'] = _get_cfg_value(kwargs, model_cfg, 'out_channels', None)
-    cfg['patch_size'] = _get_cfg_value(kwargs, model_cfg, 'patch_size', None)
 
     cfg['split_mode'] = _get_cfg_value(kwargs, model_cfg, 'split_mode', 'ratio')
     cfg['train_years'] = _get_cfg_value(kwargs, model_cfg, 'train_years', None)
@@ -36,7 +35,9 @@ def _build_parflow_loader_cfg(kwargs, model_cfg):
     cfg['val_ratio_in_holdout'] = _get_cfg_value(kwargs, model_cfg, 'val_ratio_in_holdout', 0.25)
     cfg['var_name'] = _get_cfg_value(kwargs, model_cfg, 'var_name', 'press')
     cfg['use_evap'] = _get_cfg_value(kwargs, model_cfg, 'use_evap', True)
+    cfg['use_apcp'] = _get_cfg_value(kwargs, model_cfg, 'use_apcp', False)
     cfg['use_static_input'] = _get_cfg_value(kwargs, model_cfg, 'use_static_input', True)
+    cfg['stats_path'] = _get_cfg_value(kwargs, model_cfg, 'stats_path', None)
     return cfg
 
 

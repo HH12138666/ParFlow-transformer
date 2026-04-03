@@ -4,7 +4,8 @@ warnings.filterwarnings('ignore')
 
 from openstl.api import BaseExperiment
 from openstl.utils import (create_parser, default_parser, load_config,
-                           setup_multi_processes, update_config)
+                           setup_multi_processes, update_config,
+                           init_dist, get_dist_info, destroy_dist)
 
 
 if __name__ == '__main__':
@@ -31,9 +32,21 @@ if __name__ == '__main__':
     # set multi-process settings
     setup_multi_processes(config)
 
-    print('>'*35 + ' training ' + '<'*35)
+    args.distributed = args.launcher != 'none'
+    args.rank = 0
+    args.world_size = 1
+    if args.distributed:
+        init_dist(args.launcher, port=args.port)
+        args.rank, args.world_size = get_dist_info()
+
+    if (not args.distributed) or args.rank == 0:
+        print('>'*35 + ' training ' + '<'*35)
     exp = BaseExperiment(args)
     exp.train()
 
-    print('>'*35 + ' testing  ' + '<'*35)
-    mse = exp.test()
+    if (not args.distributed) or args.rank == 0:
+        print('>'*35 + ' testing  ' + '<'*35)
+        mse = exp.test()
+
+    if args.distributed:
+        destroy_dist()

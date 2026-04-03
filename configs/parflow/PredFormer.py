@@ -1,27 +1,31 @@
 method = 'PredFormer'
 
+# 这里主要放“模型结构”和“输入/输出通道结构”。
+# 训练数据选择、loss/save 通道、数据划分方式等实验参数，
+# 统一放到 scripts/parflow/parflow_PredFormer_FacTS_train.sh 中控制。
+
 model_config = {
-    # wtd h w c
+    # 当前这套配置对应 press + evap + static 的输入形式
     'height': 146,
     'width': 252,
-    'input_channels': 36,   # wtd 1 层 + static 22 通道
-    'dynamic_channels': 14,  # wtd 单通道
-    'static_in_channels': 22, # 静态输入通道数
-    'static_out_channels': 5, # 静态压缩到 n 层，如果不使用cnn处理静态数据，则设为None
-    'in_channels': 19,   # 动态 5 + 静态压缩 5
-    'out_channels': 10,  # 输出：wtd 单通道
+    'input_channels': 11,   # 原始输入总通道 = press 10 + evap 4 + static 22
+    'dynamic_channels': 11,  # 动态输入通道 = press 10 + evap 4
+    'static_in_channels': None, # 静态输入通道数
+    'static_out_channels': None, # 静态通道经卷积压缩后的输出通道数；若不压缩则设为 None
+    'in_channels': 11,   # 送入 patch embedding 的通道 = 动态 14 + 压缩后静态 5
+    'out_channels': 10,  # 模型输出通道 = 只预测 press 的 10 层
     
     # attention type
-    'attn_type': 'post_cross',  # none or pre_cross or post_cross
+    'attn_type': 'none',  # none or pre_cross or post_cross
     
-    # cnn卷积核大小
+    # 静态数据压缩卷积核大小
     'static_kernel_size':1,
     
     # space stride
     'space_h': 60,
     'space_w': 84,
-    'space_stride_h': 30, # None表示不裁剪，直接用全图，整数表示裁剪成patch的大小
-    'space_stride_w': 42, # None表示不裁剪，直接用全图，整数表示裁剪成patch的大小
+    'space_stride_h': 50, # 滑窗步长；None 表示不做空间滑窗，直接使用全图
+    'space_stride_w': 70, # 滑窗步长；None 表示不做空间滑窗，直接使用全图
 
     
     # video length in and out
@@ -42,7 +46,7 @@ model_config = {
     'Ndepth': 6, 
 }
 
-# 默认的空间裁剪/步长配置（让 CLI 不传参时也能从配置文件生效）
+# 默认的空间裁剪/步长配置（当 train.sh 不额外传这些参数时，以这里为准）
 space_h = model_config['space_h']
 space_w = model_config['space_w']
 space_stride_h = model_config['space_stride_h']

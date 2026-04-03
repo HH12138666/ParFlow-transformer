@@ -1,10 +1,6 @@
 import os
 from pathlib import Path
 import re
-import glob
-import logging
-import random
-from typing import Optional
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -13,31 +9,29 @@ from parflow.tools.io import read_pfb
 
 from openstl.datasets.utils import create_loader
 
-logger = logging.getLogger(__name__)
-
 _STATIC_STACK_CACHE = {}
 _STATS_CACHE = {}
 
-#数值稳定常量
+# =========================
+# 全局配置
+# =========================
+
+# 数值稳定常量
 EPS = 1e-8
 
-#计算均值和方差相关设置
-NORMALIZE = True
-NORMALIZE_TARGET = True
-STATS_PATH = '/home/huanghui/data/ParFlow-transformer/stats'   
-STATS_NAME = 'stats_0.75_press_evap_static.npz'    
-STATS_PATH = os.path.join(STATS_PATH, STATS_NAME)         
-#是否拼接 static 数据
-USE_STATIC = True
-# evaptrans 固定使用 6-9 层，路径固定为 data_root/evaptrans
-EVAP_CHANNELS = [6, 7, 8, 9]
-
-#数据分割相关设置
+# 数据分割相关设置
 time_stride = 5    # 时间步长，用于数据分割
+
+
+# =========================
+# 文件名 / 年份 / 小时 ID 解析
+# =========================
+
 def _natural_key(p):
     b = os.path.basename(p)
     s = re.split(r'(\d+)', b)
     return [int(t) if t.isdigit() else t for t in s]
+
 
 def _extract_hour_id(path):
     name = os.path.basename(path)
@@ -74,6 +68,7 @@ def _normalize_years(years):
 
 
 def _build_year_ranges(files):
+    """把按时间排序的文件列表转换成 {year: (start_idx, end_idx)}。"""
     year_ranges = {}
     for idx, f in enumerate(files):
         year = _extract_year(f)
@@ -85,7 +80,9 @@ def _build_year_ranges(files):
             year_ranges[year][1] = idx + 1
     return {y: (rng[0], rng[1]) for y, rng in year_ranges.items()}
 
+
 def _build_id_map(files, label):
+    """把文件列表转换成 {hour_id: filepath}，并检查重复 ID。"""
     items = {}
     for f in files:
         fid = _extract_hour_id(f)
@@ -99,32 +96,45 @@ def _build_id_map(files, label):
     return items
 
 
-def _prepare_press_evap_files(press_root, evap_root=None, align_by_hour_id=False):
+ # =========================
+ # 文件收集与路径解析
+ # =========================
+
+def _prepare_press_evap_apcp_files(press_root, evap_root=None, apcp_root=None):
+    """准备主变量与辅助动态文件列表，并按小时 ID 与主变量严格对齐。"""
     press_files = _list_pfb_files(press_root)
     evap_files = _list_pfb_files(evap_root) if evap_root is not None else None
+    apcp_files = _list_pfb_files(apcp_root) if apcp_root is not None else None
 
-    if align_by_hour_id:
-        press_map = _build_id_map(press_files, "press")
-        press_ids = sorted(press_map)
-        press_files = [press_map[i] for i in press_ids]
-        if evap_files is not None:
-            evap_map = _build_id_map(evap_files, "evap")
-            missing = [i for i in press_ids if i not in evap_map]
-            if missing:
-                raise ValueError(f"Missing evap hours for press ids (first 5): {missing[:5]}")
-            extra = [i for i in evap_map.keys() if i not in press_map]
-            if extra:
-                raise ValueError(f"Evap hours not in press ids (first 5): {extra[:5]}")
-            evap_files = [evap_map[i] for i in press_ids]
-    elif evap_files is not None and len(evap_files) != len(press_files):
-        raise ValueError(
-            f"press/evap file counts do not match: {len(press_files)} vs {len(evap_files)}"
-        )
+    press_map = _build_id_map(press_files, "press")
+    press_ids = sorted(press_map)
+    press_files = [press_map[i] for i in press_ids]
 
-    return press_files, evap_files
+    if evap_files is not None:
+        evap_map = _build_id_map(evap_files, "evap")
+        missing = [i for i in press_ids if i not in evap_map]
+        if missing:
+            raise ValueError(f"Missing evap hours for press ids (first 5): {missing[:5]}")
+        extra = [i for i in evap_map.keys() if i not in press_map]
+        if extra:
+            raise ValueError(f"Evap hours not in press ids (first 5): {extra[:5]}")
+        evap_files = [evap_map[i] for i in press_ids]
+
+    if apcp_files is not None:
+        apcp_map = _build_id_map(apcp_files, "APCP")
+        missing = [i for i in press_ids if i not in apcp_map]
+        if missing:
+            raise ValueError(f"Missing APCP hours for press ids (first 5): {missing[:5]}")
+        extra = [i for i in apcp_map.keys() if i not in press_map]
+        if extra:
+            raise ValueError(f"APCP hours not in press ids (first 5): {extra[:5]}")
+        apcp_files = [apcp_map[i] for i in press_ids]
+
+    return press_files, evap_files, apcp_files
 
 
-def _list_pfb_files(root) :
+def _list_pfb_files(root):
+    """递归列出目录下所有 .pfb 文件，并按自然顺序排序。"""
     root_path = Path(root)
     files = sorted((str(p) for p in root_path.rglob('*.pfb')), key=_natural_key)
     if not files:
@@ -132,16 +142,12 @@ def _list_pfb_files(root) :
     return files
 
 
-def _resolve_parflow_roots(data_root, use_static=USE_STATIC, var_name='press', use_evap=True):
-    """
-    Allow passing a base directory that contains subfolders:
-    - press/wtd/...
-    - evaptrans
-    - static
-    """
+def _resolve_parflow_roots(data_root, use_static=True, var_name='press', use_evap=True, use_apcp=False):
+    """根据 data_root 推导主变量、evap、APCP 和 static 的根目录。"""
     base = Path(data_root)
     press_root = str(base / var_name)
     evap_root = None
+    apcp_root = None
     if use_evap:
         evap_root_path = base / "evaptrans"
         if not evap_root_path.exists():
@@ -149,35 +155,25 @@ def _resolve_parflow_roots(data_root, use_static=USE_STATIC, var_name='press', u
             if alt.exists():
                 evap_root_path = alt
         evap_root = str(evap_root_path)
+    if use_apcp:
+        apcp_root_path = base / "APCP"
+        if not apcp_root_path.exists():
+            alt = base / "apcp"
+            if alt.exists():
+                apcp_root_path = alt
+        if apcp_root_path.exists():
+            apcp_root = str(apcp_root_path)
     static_root = str(base / "static") if use_static else None
-    return press_root, evap_root, static_root
+    return press_root, evap_root, apcp_root, static_root
 
 
-def _parse_static_data(static_data):
-    if static_data is None:
-        return None
-    if isinstance(static_data, (list, tuple)):
-        patterns = [str(x).strip() for x in static_data if str(x).strip()]
-    else:
-        patterns = [p.strip() for p in str(static_data).split(',') if p.strip()]
-    return patterns or None
+# =========================
+# 空间裁剪坐标
+# =========================
 
 
-def _filter_static_files(files, static_data):
-    patterns = _parse_static_data(static_data)
-    if not patterns:
-        return files
-    matched = []
-    for f in files:
-        name = os.path.basename(f)
-        if any(re.search(pat, name, re.IGNORECASE) for pat in patterns):
-            matched.append(f)
-    if not matched:
-        raise FileNotFoundError(f'No static .pfb files matched patterns: {patterns}')
-    return matched
-
-# 根据空间尺寸和步长构建空间裁剪坐标列表
 def _build_space_coords(height, width, space_h, space_w, space_stride_h=None, space_stride_w=None):
+    """根据窗口大小和步长，构建所有滑窗左上角坐标。"""
     if space_h is None or space_w is None:
         return [(0, 0)]
 
@@ -198,9 +194,13 @@ def _build_space_coords(height, width, space_h, space_w, space_stride_h=None, sp
         coords_w.append(width - space_w)
     return [(top, left) for top in coords_h for left in coords_w]
 
-# 读取单个动态场文件（press/wtd 等）
-def _read_press_frame(press_path) :
 
+# =========================
+# PFB 读取与通道拼接
+# =========================
+
+def _read_press_frame(press_path):
+    """读取主变量单帧，返回形状 (C, H, W)。"""
     arr = read_pfb(get_absolute_path(press_path)).astype(np.float32)  # (C,H,W)
     if arr.ndim == 2:
         arr = arr[None, ...]
@@ -209,8 +209,8 @@ def _read_press_frame(press_path) :
     return arr
 
 
-# 读取单个蒸发传输场文件
 def _read_evap_frame(evap_path):
+    """读取 evaptrans 单帧（保留全部层）。"""
     if evap_path is None:
         raise ValueError("evap_path is required when reading evaptrans data")
 
@@ -219,28 +219,43 @@ def _read_evap_frame(evap_path):
     if arr.ndim != 3:
         raise ValueError(f'Expected 3D evaptrans array, got shape {arr.shape} for {evap_path}')
 
-    return arr[EVAP_CHANNELS, ...]
+    return arr
 
-# 读取静态数据堆栈
+
+def _read_apcp_frame(apcp_path):
+    """读取 APCP 单帧，返回形状 (C, H, W)。"""
+    if apcp_path is None:
+        raise ValueError("apcp_path is required when reading APCP data")
+    arr = read_pfb(get_absolute_path(str(apcp_path))).astype(np.float32)
+    if arr.ndim == 2:
+        arr = arr[None, ...]
+    elif arr.ndim != 3:
+        raise ValueError(f'Expected 2D/3D APCP array, got shape {arr.shape} for {apcp_path}')
+    return arr
+
+
 def _read_static_stack(static_root, static_data=None):
+    """仅读取融合后的 static.pfb，返回形状 (C, H, W)。"""
     if static_root is None:
         return None
-    files = _list_pfb_files(static_root)
-    files = _filter_static_files(files, static_data)
-    arrays = []
-    for f in files:
-        arr = read_pfb(get_absolute_path(str(f))).astype(np.float32)
-        if arr.ndim == 2:
-            arr = arr[None, ...]
-        elif arr.ndim != 3:
-            raise ValueError(f'Expected 2D/3D static array, got shape {arr.shape} for {f}')
-        arrays.append(arr)
-    return np.concatenate(arrays, axis=0)
+
+    merged_static = Path(static_root) / "static.pfb"
+    if not merged_static.exists():
+        raise FileNotFoundError(
+            f"Static file not found: {merged_static}. "
+            "Please provide a merged static/static.pfb."
+        )
+
+    arr = read_pfb(get_absolute_path(str(merged_static))).astype(np.float32)
+    if arr.ndim == 2:
+        arr = arr[None, ...]
+    elif arr.ndim != 3:
+        raise ValueError(f'Expected 2D/3D static array, got shape {arr.shape} for {merged_static}')
+    return arr
 
 
 def _get_static_stack_cached(static_root, static_data=None):
-    patterns = _parse_static_data(static_data)
-    cache_key = (str(static_root), tuple(patterns) if patterns is not None else None)
+    cache_key = str(static_root)
     cached = _STATIC_STACK_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -260,14 +275,16 @@ def _get_stats_cached(stats_path):
     return mean, std
 
 
-def _read_combined_frame(press_path,evap_path = None,static_arr = None):
-    """读取压力场，并可选拼接指定层的 evaptrans 和 static 通道"""
+def _read_combined_frame(press_path, evap_path=None, apcp_path=None, static_arr=None):
+    """读取压力场，并可选拼接 evaptrans/APCP/static 通道。"""
     press = _read_press_frame(press_path)
-    if evap_path is None:
-        combined = press
-    else:
+    combined = press
+    if evap_path is not None:
         evap = _read_evap_frame(evap_path)
-        combined = np.concatenate([press, evap], axis=0)
+        combined = np.concatenate([combined, evap], axis=0)
+    if apcp_path is not None:
+        apcp = _read_apcp_frame(apcp_path)
+        combined = np.concatenate([combined, apcp], axis=0)
     if static_arr is not None:
         if static_arr.shape[1:] != combined.shape[1:]:
             raise ValueError(
@@ -276,9 +293,13 @@ def _read_combined_frame(press_path,evap_path = None,static_arr = None):
         combined = np.concatenate([combined, static_arr], axis=0)
     return combined
 
-#增强数据,暂时用不到
-def augment_pair(X, Y,p_flip_h=0.5,p_flip_w=0.5,p_noise=0.2,noise_sigma=0.001):
-    
+
+# =========================
+# 数据增强
+# =========================
+
+def augment_pair(X, Y, p_flip_h=0.5, p_flip_w=0.5, p_noise=0.2, noise_sigma=0.001):
+    """对输入输出同步做简单空间翻转与噪声增强。"""
     if torch.rand(1).item() < p_flip_h:
         X = X.flip(-2)
         Y = Y.flip(-2)
@@ -290,25 +311,29 @@ def augment_pair(X, Y,p_flip_h=0.5,p_flip_w=0.5,p_noise=0.2,noise_sigma=0.001):
     return X, Y
 
 
+# =========================
+# Dataset 定义
+# =========================
+
 class ParFlowDataset(Dataset):
-    def __init__(self, press_root, split, pre_seq_length=12, aft_seq_length=12 ,in_shape = None,use_augment=False,
-                space_h = None,
-                space_w = None,
-                space_stride_h = None,
-                space_stride_w = None,
-                evap_root = None,
-                static_root = None,
-                out_channels = None,
-                static_data = None,
-                align_by_hour_id = False,
-                press_files = None,
-                evap_files = None,
-                patch_size = None,
-                split_mode = 'ratio',
-                train_years = None,
-                holdout_years = None,
-                val_ratio_in_holdout = 0.25,
-                ):
+    def __init__(self, press_root, split, pre_seq_length=12, aft_seq_length=12, in_shape=None, use_augment=False,
+                 space_h=None,
+                 space_w=None,
+                 space_stride_h=None,
+                 space_stride_w=None,
+                 evap_root=None,
+                 apcp_root=None,
+                 static_root=None,
+                 out_channels=None,
+                 static_data=None,
+                 press_files=None,
+                 evap_files=None,
+                 apcp_files=None,
+                 split_mode='ratio',
+                 train_years=None,
+                 holdout_years=None,
+                 val_ratio_in_holdout=0.25,
+                 stats_path=None):
         super().__init__()
         split = str(split).lower()
         if split not in ('train', 'val', 'test'):
@@ -324,6 +349,7 @@ class ParFlowDataset(Dataset):
         self.space_w = space_w
         self.use_space = self.space_h is not None and self.space_w is not None
         self.evap_root = evap_root
+        self.apcp_root = apcp_root
         self.static_root = static_root
         self.static_data = static_data
         self.static_arr = (
@@ -331,13 +357,12 @@ class ParFlowDataset(Dataset):
             if self.static_root is not None else None
         )
         self.out_channels = out_channels  # 仅用于标签 y，输入 x 仍保留全部通道
-        self.align_by_hour_id = align_by_hour_id
-        self.patch_size = patch_size
         self.split_mode = str(split_mode).lower()
         self.train_years = _normalize_years(train_years)
         self.holdout_years = _normalize_years(holdout_years)
         self.val_ratio_in_holdout = float(val_ratio_in_holdout)
-        
+        self.stats_path = stats_path
+
         if self.use_space:
             self.space_stride_h = space_stride_h or self.space_h
             self.space_stride_w = space_stride_w or self.space_w
@@ -345,26 +370,32 @@ class ParFlowDataset(Dataset):
             self.space_stride_h = None
             self.space_stride_w = None
 
-
         if press_files is None:
-            self.files, self.evap_files = _prepare_press_evap_files(
+            self.files, self.evap_files, self.apcp_files = _prepare_press_evap_apcp_files(
                 self.press_root,
                 self.evap_root,
-                align_by_hour_id=self.align_by_hour_id,
+                self.apcp_root,
             )
         else:
             self.files = list(press_files)
             self.evap_files = list(evap_files) if evap_files is not None else None
+            self.apcp_files = list(apcp_files) if apcp_files is not None else None
             if self.evap_files is not None and len(self.evap_files) != len(self.files):
                 raise ValueError(
                     f"press/evap file counts do not match: {len(self.files)} vs {len(self.evap_files)}"
                 )
+            if self.apcp_files is not None and len(self.apcp_files) != len(self.files):
+                raise ValueError(
+                    f"press/APCP file counts do not match: {len(self.files)} vs {len(self.apcp_files)}"
+                )
 
+        # 通过首个样本推断通道数和空间尺寸
         self.num_frames = len(self.files)
         self.year_ranges = _build_year_ranges(self.files)
         sample = _read_combined_frame(
             self.files[0],
             evap_path=self.evap_files[0] if self.evap_files is not None else None,
+            apcp_path=self.apcp_files[0] if self.apcp_files is not None else None,
             static_arr=self.static_arr,
         )
         C, H, W = sample.shape
@@ -379,11 +410,9 @@ class ParFlowDataset(Dataset):
 
         self.valid_h = self.space_h if self.use_space else self.H
         self.valid_w = self.space_w if self.use_space else self.W
-        self.padded_h = self.valid_h
-        self.padded_w = self.valid_w
 
+        # 先按时间切，再按空间滑窗展开样本索引
         self.time_indices = self._build_time_indices()
-        
         if self.use_space:
             self.sample_indices = [
                 (t, p) for t in self.time_indices for p in range(len(self.space_coords))
@@ -391,19 +420,26 @@ class ParFlowDataset(Dataset):
         else:
             self.sample_indices = self.time_indices
 
+        self.num_sequences = len(self.time_indices)
+        self.num_patches_per_frame = len(self.space_coords)
+        self.merge_slots = None
+        self.merge_tops = None
+        self.merge_lefts = None
+        if self.use_space:
+            self._build_merge_plan()
+
         self.mean = None
         self.std = None
 
-        if NORMALIZE:
-            if STATS_PATH and os.path.exists(STATS_PATH):
-                self.mean, self.std = _get_stats_cached(STATS_PATH)
-                if self.mean.shape[0] != self.C or self.std.shape[0] != self.C:
-                    raise ValueError(f"Stats mismatch: stats C={self.mean.shape[0]} vs dataset C={self.C}.")
-            else:
-                raise FileNotFoundError(
-                    f"Stats file not found at {STATS_PATH}. "
-                    "Please compute mean/std offline and save the npz first."
-                )
+        if self.stats_path and os.path.exists(self.stats_path):
+            self.mean, self.std = _get_stats_cached(self.stats_path)
+            if self.mean.shape[0] != self.C or self.std.shape[0] != self.C:
+                raise ValueError(f"Stats mismatch: stats C={self.mean.shape[0]} vs dataset C={self.C}.")
+        else:
+            raise FileNotFoundError(
+                f"Stats file not found at {self.stats_path}. "
+                "Please compute mean/std offline and save the npz first."
+            )
         self.mean_t = torch.from_numpy(self.mean).view(1, self.C, 1, 1).float() if self.mean is not None else None
         self.std_t = torch.from_numpy(self.std).view(1, self.C, 1, 1).float() if self.std is not None else None
         self.std_eps_t = (self.std_t + EPS) if self.std_t is not None else None
@@ -414,28 +450,51 @@ class ParFlowDataset(Dataset):
             self.mean_y_t = None
             self.std_y_eps_t = None
 
-    def _build_time_indices(self, stride=time_stride):
-        def build_range(s, e):
-            end = e - 1
-            max_start = end - self.total + 1
-            if max_start < s:
-                return []
-            return list(range(s, max_start + 1, stride))
+    def _build_merge_plan(self):
+        """预计算 patch -> (slot, top, left) 映射，供验证/测试快速拼图。"""
+        slot_map = {t: i for i, t in enumerate(self.time_indices)}
+        n = len(self.sample_indices)
+        self.merge_slots = np.empty(n, dtype=np.int32)
+        self.merge_tops = np.empty(n, dtype=np.int32)
+        self.merge_lefts = np.empty(n, dtype=np.int32)
+        for idx, (t_idx, p_idx) in enumerate(self.sample_indices):
+            slot = slot_map.get(t_idx)
+            if slot is None:
+                raise ValueError(f"Missing merge slot for time index {t_idx}")
+            top, left = self.space_coords[p_idx]
+            self.merge_slots[idx] = slot
+            self.merge_tops[idx] = top
+            self.merge_lefts[idx] = left
 
-        if self.split_mode == 'ratio':
-            n_train = int(self.num_frames * 0.75)
-            n_val = int(self.num_frames * 0.10)
-            if self.split == 'train':
-                return build_range(0, n_train)
-            if self.split == 'val':
-                return build_range(n_train, n_train + n_val)
-            return build_range(n_train + n_val, self.num_frames)
+    def _build_range(self, start, end, stride):
+        """在 [start, end) 范围内构建合法时间窗起点。"""
+        end = end - 1
+        max_start = end - self.total + 1
+        if max_start < start:
+            return []
+        return list(range(start, max_start + 1, stride))
 
-        if self.split_mode != 'year':
-            raise ValueError(
-                f"Invalid split_mode={self.split_mode}. Expected 'ratio' or 'year'."
-            )
+    def _build_time_indices_ratio(self, stride):
+        """按固定比例切分 train/val/test。"""
+        n_train = int(self.num_frames * 0.75)
+        n_val = int(self.num_frames * 0.10)
+        if self.split == 'train':
+            return self._build_range(0, n_train, stride)
+        if self.split == 'val':
+            return self._build_range(n_train, n_train + n_val, stride)
+        return self._build_range(n_train + n_val, self.num_frames, stride)
 
+    def _year_val_test_range(self, year, available_years):
+        if year not in self.year_ranges:
+            raise ValueError(f"Year {year} not in dataset. available_years={available_years}")
+        s, e = self.year_ranges[year]
+        n = e - s
+        n_val = int(round(n * self.val_ratio_in_holdout))
+        n_val = max(1, min(n - 1, n_val))
+        return (s, s + n_val), (s + n_val, e)
+
+    def _build_time_indices_year(self, stride):
+        """按年份切分：train_years 训练，holdout_years 再分 val/test。"""
         available_years = sorted(self.year_ranges.keys())
         if not available_years:
             raise ValueError("No available years parsed from files.")
@@ -454,52 +513,51 @@ class ParFlowDataset(Dataset):
         if not (0.0 < self.val_ratio_in_holdout < 1.0):
             raise ValueError(f"val_ratio_in_holdout must be in (0,1), got {self.val_ratio_in_holdout}")
 
-        def year_val_test_range(year):
-            if year not in self.year_ranges:
-                raise ValueError(f"Year {year} not in dataset. available_years={available_years}")
-            s, e = self.year_ranges[year]
-            n = e - s
-            n_val = int(round(n * self.val_ratio_in_holdout))
-            n_val = max(1, min(n - 1, n_val))
-            return (s, s + n_val), (s + n_val, e)
-
         indices = []
         if self.split == 'train':
             for year in train_years:
                 if year not in self.year_ranges:
                     raise ValueError(f"Year {year} not in dataset. available_years={available_years}")
                 s, e = self.year_ranges[year]
-                indices.extend(build_range(s, e))
+                indices.extend(self._build_range(s, e, stride))
             return indices
 
         if self.split == 'val':
             for year in holdout_years:
-                (s, e), _ = year_val_test_range(year)
-                indices.extend(build_range(s, e))
+                (s, e), _ = self._year_val_test_range(year, available_years)
+                indices.extend(self._build_range(s, e, stride))
             return indices
 
         for year in holdout_years:
-            _, (s, e) = year_val_test_range(year)
-            indices.extend(build_range(s, e))
+            _, (s, e) = self._year_val_test_range(year, available_years)
+            indices.extend(self._build_range(s, e, stride))
         return indices
 
-    def __len__(self):      
+    def _build_time_indices(self, stride=time_stride):
+        """根据当前 split 策略，构造时间窗起点索引列表。"""
+        if self.split_mode == 'ratio':
+            return self._build_time_indices_ratio(stride)
+
+        if self.split_mode != 'year':
+            raise ValueError(
+                f"Invalid split_mode={self.split_mode}. Expected 'ratio' or 'year'."
+            )
+        return self._build_time_indices_year(stride)
+
+    def __len__(self):
         return len(self.sample_indices)
-    
-    
-     
+
     def _read_window(self, t0, top=0, left=0):
+        """读取一个时间窗；若启用空间滑窗，则再裁出对应 patch。"""
         T = self.total
-        if self.use_space:
-            h, w = self.valid_h, self.valid_w
-        else:
-            h, w = self.valid_h, self.valid_w
+        h, w = self.valid_h, self.valid_w
         out = torch.empty((T, self.C, h, w), dtype=torch.float32)
         for i in range(T):
             path = self.files[t0 + i]
             arr = _read_combined_frame(
                 path,
                 evap_path=self.evap_files[t0 + i] if self.evap_files is not None else None,
+                apcp_path=self.apcp_files[t0 + i] if self.apcp_files is not None else None,
                 static_arr=self.static_arr,
             )
             if self.use_space:
@@ -508,7 +566,7 @@ class ParFlowDataset(Dataset):
         return out
 
     def __getitem__(self, idx):
-
+        """返回单个样本 (x, y)。"""
         if self.use_space:
             t0, p_idx = self.sample_indices[idx]
             top, left = self.space_coords[p_idx]
@@ -516,7 +574,7 @@ class ParFlowDataset(Dataset):
             t0 = self.sample_indices[idx]
             top, left = 0, 0
         win = self._read_window(t0, top=top, left=left)
-          
+
         x = win[: self.pre]
         y = win[self.pre : self.pre + self.aft]
         if self.out_channels is not None:
@@ -525,68 +583,77 @@ class ParFlowDataset(Dataset):
         if self.use_augment and self.split == 'train':
             x, y = augment_pair(x, y)
 
-        if NORMALIZE and self.mean_t is not None and self.std_t is not None:
+        if self.mean_t is not None and self.std_t is not None:
             x = x.sub(self.mean_t).div(self.std_eps_t)
-            if NORMALIZE_TARGET:
-                if self.out_channels is not None:
-                    y = y.sub(self.mean_y_t).div(self.std_y_eps_t)
-                else:
-                    y = y.sub(self.mean_t).div(self.std_eps_t)
+            if self.out_channels is not None:
+                y = y.sub(self.mean_y_t).div(self.std_y_eps_t)
+            else:
+                y = y.sub(self.mean_t).div(self.std_eps_t)
 
         return x, y
 
 
-def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6,aft_seq_length = 6,
-              in_shape = None,distributed = False,use_augment = False,use_prefetcher = False,drop_last = False,
-              space_h = None,space_w = None,space_stride_h= None,space_stride_w= None,out_channels = None,
-              static_data = None,
-              align_by_hour_id = False,
-              patch_size = None,
-              split_mode = 'ratio',
-              train_years = None,
-              holdout_years = None,
-              val_ratio_in_holdout = 0.25,
-              var_name = 'press',
-              use_evap = True,
-              use_static_input = USE_STATIC,
-              ):
+# =========================
+# DataLoader 构建入口
+# =========================
+
+def load_data(batch_size, val_batch_size, data_root, num_workers, pre_seq_length=6, aft_seq_length=6,
+              in_shape=None, distributed=False, use_augment=False, use_prefetcher=False, drop_last=False,
+              space_h=None, space_w=None, space_stride_h=None, space_stride_w=None, out_channels=None,
+              static_data=None,
+              split_mode='ratio',
+              train_years=None,
+              holdout_years=None,
+              val_ratio_in_holdout=0.25,
+              var_name='press',
+              use_evap=True,
+              use_apcp=False,
+              use_static_input=True,
+              stats_path=None):
+    """构建 ParFlow 的 train / val / test 三个 DataLoader。"""
 
     use_static = use_static_input or static_data is not None
-    press_root, evap_root, static_root = _resolve_parflow_roots(
-        data_root, use_static=use_static, var_name=var_name, use_evap=use_evap
+    press_root, evap_root, apcp_root, static_root = _resolve_parflow_roots(
+        data_root, use_static=use_static, var_name=var_name, use_evap=use_evap, use_apcp=use_apcp
     )
-    all_press_files, all_evap_files = _prepare_press_evap_files(
+    all_press_files, all_evap_files, all_apcp_files = _prepare_press_evap_apcp_files(
         press_root,
         evap_root,
-        align_by_hour_id=align_by_hour_id,
+        apcp_root,
+    )
+    common_ds_kwargs = dict(
+        in_shape=in_shape,
+        space_h=space_h,
+        space_w=space_w,
+        space_stride_h=space_stride_h,
+        space_stride_w=space_stride_w,
+        evap_root=evap_root,
+        apcp_root=apcp_root,
+        static_root=static_root,
+        out_channels=out_channels,
+        static_data=static_data,
+        press_files=all_press_files,
+        evap_files=all_evap_files,
+        apcp_files=all_apcp_files,
+        split_mode=split_mode,
+        train_years=train_years,
+        holdout_years=holdout_years,
+        val_ratio_in_holdout=val_ratio_in_holdout,
+        stats_path=stats_path,
     )
 
-    train_ds = ParFlowDataset(press_root,'train',pre_seq_length,aft_seq_length,
-        in_shape=in_shape,use_augment=use_augment,
-        space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
-        align_by_hour_id=align_by_hour_id,press_files=all_press_files,evap_files=all_evap_files,
-        patch_size=patch_size,
-        split_mode=split_mode,train_years=train_years,holdout_years=holdout_years,
-        val_ratio_in_holdout=val_ratio_in_holdout,)
-    
-    val_ds = ParFlowDataset(press_root, 'val',pre_seq_length,aft_seq_length,
-        in_shape=in_shape,use_augment=False,
-        space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
-        align_by_hour_id=align_by_hour_id,press_files=all_press_files,evap_files=all_evap_files,
-        patch_size=patch_size,
-        split_mode=split_mode,train_years=train_years,holdout_years=holdout_years,
-        val_ratio_in_holdout=val_ratio_in_holdout,)
-    
-    test_ds = ParFlowDataset(press_root,'test',pre_seq_length,aft_seq_length,
-        in_shape=in_shape,use_augment=False,
-        space_h=space_h,space_w=space_w,space_stride_h=space_stride_h,space_stride_w=space_stride_w,
-        evap_root=evap_root,static_root=static_root,out_channels=out_channels,static_data=static_data,
-        align_by_hour_id=align_by_hour_id,press_files=all_press_files,evap_files=all_evap_files,
-        patch_size=patch_size,
-        split_mode=split_mode,train_years=train_years,holdout_years=holdout_years,
-        val_ratio_in_holdout=val_ratio_in_holdout,)
+    train_ds = ParFlowDataset(
+        press_root, 'train', pre_seq_length, aft_seq_length,
+        use_augment=use_augment, **common_ds_kwargs
+    )
+    val_ds = ParFlowDataset(
+        press_root, 'val', pre_seq_length, aft_seq_length,
+        use_augment=False, **common_ds_kwargs
+    )
+    test_ds = ParFlowDataset(
+        press_root, 'test', pre_seq_length, aft_seq_length,
+        use_augment=False, **common_ds_kwargs
+    )
 
     input_channels = train_ds.C
 
@@ -628,52 +695,3 @@ def load_data(batch_size,val_batch_size,data_root,num_workers,pre_seq_length = 6
     )
 
     return train_loader, vali_loader, test_loader
-
-if __name__ == "__main__":
-    # 简单测试数据集和数据加载器
-    data_root = '/home/huanghui/data/ParFlow-transformer/data/parflow'
-    batch_size = 28
-    val_batch_size = 28
-    num_workers = 4
-    pre_seq_length = 12
-    aft_seq_length = 12
-    in_shape = [24, 36, 146, 252]  # 10 个压力层 + 4 个 evaptrans 层 + static 数据
-    space_h = 60
-    space_w = 84
-    space_stride_h = 30
-    space_stride_w = 42
-    out_channels = 14  # 预测压力 + evaptrans 通道
-
-    train_loader, vali_loader, test_loader = load_data(
-        batch_size,
-        val_batch_size,
-        data_root,
-        num_workers,
-        pre_seq_length,
-        aft_seq_length,
-        in_shape,
-        distributed=False,
-        use_augment=True,
-        use_prefetcher=False,
-        drop_last=False,
-        space_h=space_h,
-        space_w=space_w,
-        space_stride_h=space_stride_h,
-        space_stride_w=space_stride_w,
-        out_channels=out_channels,
-        static_data='perm_x,alpha_z6-9,n_z6-9,porosity_z6-9',
-    )
-
-    for x, y in train_loader:
-        print("Train batch - x shape:", x.shape, "y shape:", y.shape)
-        break
-
-    for x, y in vali_loader:
-        print("Val batch - x shape:", x.shape, "y shape:", y.shape)
-        break
-
-    for x, y in test_loader:
-        print("Test batch - x shape:", x.shape, "y shape:", y.shape)
-        break
-#export PYTHONPATH=/home/huanghui/data/ParFlow-transformer:$PYTHONPATH
-#python /home/huanghui/data/ParFlow-transformer/openstl/datasets/dataloader_parflow.py
