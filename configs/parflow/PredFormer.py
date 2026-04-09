@@ -8,24 +8,24 @@ model_config = {
     # 当前这套配置对应 press + evap + static 的输入形式
     'height': 146,
     'width': 252,
-    'input_channels': 11,   # 原始输入总通道 = press 10 + evap 4 + static 22
+    'input_channels': 33,   # 原始输入总通道 = press 10 + evap 4 + static 22
     'dynamic_channels': 11,  # 动态输入通道 = press 10 + evap 4
-    'static_in_channels': None, # 静态输入通道数
-    'static_out_channels': None, # 静态通道经卷积压缩后的输出通道数；若不压缩则设为 None
-    'in_channels': 11,   # 送入 patch embedding 的通道 = 动态 14 + 压缩后静态 5
+    'static_in_channels': 22, # 静态输入通道数
+    'static_out_channels': 5, # 静态通道经卷积压缩后的输出通道数；若不压缩则设为 None
+    'in_channels': 16,   # 送入 patch embedding 的通道 = 动态 14 + 压缩后静态 5
     'out_channels': 10,  # 模型输出通道 = 只预测 press 的 10 层
     
     # attention type
-    'attn_type': 'none',  # none or pre_cross or post_cross
+    'attn_type': 'post_cross',  # none or pre_cross or post_cross
     
     # 静态数据压缩卷积核大小
-    'static_kernel_size':1,
+    'static_kernel_size':3,
     
     # space stride
     'space_h': 60,
     'space_w': 84,
-    'space_stride_h': 50, # 滑窗步长；None 表示不做空间滑窗，直接使用全图
-    'space_stride_w': 70, # 滑窗步长；None 表示不做空间滑窗，直接使用全图
+    'space_stride_h': 30, # 滑窗步长；None 表示不做空间滑窗，直接使用全图
+    'space_stride_w': 42, # 滑窗步长；None 表示不做空间滑窗，直接使用全图
 
     
     # video length in and out

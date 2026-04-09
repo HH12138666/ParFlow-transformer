@@ -10,7 +10,7 @@ export PYTHONPATH="$REPO:$PYTHONPATH"
 # sbatch /home/huanghui/data/slurm_job/ParFlow_transformer.sh
 
 # 选择使用的单张 GPU
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=3
 CURRENT_TIME=$(date +"%Y-%m-%d-%H-%M")
 EX_NAME="ParFlow_press/${CURRENT_TIME}_FACTS"
 
@@ -21,7 +21,7 @@ python tools/train.py \
     --res_dir work_dirs \
     --batch_size 28 \
     --val_batch_size 28 \
-    --epoch 80 \
+    --epoch 50 \
     --overwrite \
     --lr 3e-4 \
     --sched cosine \
@@ -32,13 +32,13 @@ python tools/train.py \
     --log_step 1 \
     --weight_decay 1e-2 \
     --ex_name "$EX_NAME" \
-    --early_stop_epoch 60\
+    --early_stop_epoch 35\
     --num_workers 28 \
     --var_name press \
     --use_evap False \
     --use_apcp True \
-    --use_static_input False \
-    --stats_path /home/huanghui/data/ParFlow-transformer/stats/stats_press_APCP1.8.npz \
+    --use_static_input True \
+    --stats_path /home/huanghui/data/ParFlow-transformer/stats/stats_press_APCP1_static.npz \
     --split_mode year \
     --train_years [2020,2021] \
     --holdout_years [2019] \

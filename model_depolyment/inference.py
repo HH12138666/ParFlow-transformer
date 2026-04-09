@@ -19,31 +19,32 @@ from openstl.models import PredFormer_Model
 from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb, write_pfb
 
-#sbatch /home/huanghui/data/slurm_job/run_inference.sh
+#sbatch /home/huanghui/data/slurm_job/inference.sh
 # ---- User configuration ----
 # Training output dir (contains timestamp subdirs with checkpoint.pth)
 WORK_DIR = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press"
-CHECKPOINT_NAME = "2026-04-02-01-05_FACTS"
+CHECKPOINT_NAME = "2026-04-06-22-11_FACTS"
 CHECKPOINT_PATH = os.path.join(WORK_DIR, CHECKPOINT_NAME, "checkpoint.pth")
 
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
 OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press"
-RUN_PARAM = "press_apcp1.8_train19_20_cnn0_k1_h60_w84_sh_50_sw70_in12_out12_rollout720"
+RUN_PARAM = "test_inference"  
 
 # Must match current training data pipeline
-VAR_NAME = "press"
-USE_EVAP = False
-USE_APCP = True
-USE_STATIC = False
+# VAR_NAME = "press"
+# USE_EVAP = False
+# USE_APCP = False
+# USE_STATIC = False
 #perm_x,alpha_z6-9,n_z6-9,porosity_z6-9
 STATIC_DATA = ""
 
-STATS_PATH = "/home/huanghui/data/ParFlow-transformer/stats/stats_press_APCP1.8.npz"
+STATS_PATH = ""
 EPS = 1e-8
 
 # Prediction range (parsed from filename tail digits, e.g., 20190001)
-START_HOUR = 20197450
-END_HOUR = 20198760
+START_HOUR = 20192788
+END_HOUR = 20193520
+
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 USE_AMP =True
@@ -344,6 +345,12 @@ def _autocast_ctx():
     return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
 
 
+def _cuda_sync():
+    """Synchronize CUDA to make timing around model forward accurate."""
+    if DEVICE == "cuda":
+        torch.cuda.synchronize()
+
+
 def _parse_index(value, default=None):
     if value is None:
         return default
@@ -443,8 +450,33 @@ def _load_model_params(checkpoint_path):
     return params, model_param_path
 
 
+def _require_param(params, key):
+    """Get a required key from model_param.json and fail loudly if missing."""
+    if key not in params:
+        raise KeyError(
+            f"USE_MODEL_PARAM_JSON=True requires key '{key}' in model_param.json, "
+            "but it is missing."
+        )
+    return params[key]
+
+
+def _require_model_cfg_key(cfg, key):
+    """Get a required key from model_config and fail loudly if missing."""
+    if key not in cfg:
+        raise KeyError(
+            f"USE_MODEL_PARAM_JSON=True requires key '{key}' in model_config, "
+            "but it is missing."
+        )
+    return cfg[key]
+
+
 def main():
     start_time = time.time()
+    forward_time = 0.0
+    forward_calls = 0
+    split_infer_stitch_time = 0.0
+    split_infer_stitch_blocks = 0
+    split_infer_stitch_patches = 0
 
     if not Path(CHECKPOINT_PATH).exists():
         raise FileNotFoundError(f"Checkpoint not found: {CHECKPOINT_PATH}")
@@ -452,27 +484,43 @@ def main():
     run_params, model_param_path = ({}, None)
     if USE_MODEL_PARAM_JSON:
         run_params, model_param_path = _load_model_params(CHECKPOINT_PATH)
-        if model_param_path is not None:
-            print(f"[config] loaded model params: {model_param_path}")
+        if model_param_path is None:
+            raise FileNotFoundError(
+                "USE_MODEL_PARAM_JSON=True but model_param.json was not found next to checkpoint. "
+                "Please provide the matching training run folder."
+            )
+        print(f"[config] loaded model params: {model_param_path}")
 
-    cfg = dict(_model_cfg)
-    cfg_from_run = run_params.get("model_config")
-    if isinstance(cfg_from_run, dict) and cfg_from_run:
+        cfg_from_run = _require_param(run_params, "model_config")
+        if not isinstance(cfg_from_run, dict) or not cfg_from_run:
+            raise ValueError("model_param.json key 'model_config' must be a non-empty dict.")
         cfg = dict(cfg_from_run)
 
-    var_name = run_params.get("var_name", VAR_NAME)
-    use_evap = _to_bool(run_params.get("use_evap", USE_EVAP))
-    use_apcp = _to_bool(run_params.get("use_apcp", USE_APCP))
-    use_static = _to_bool(run_params.get("use_static_input", USE_STATIC))
-    static_data = run_params.get("static_data", STATIC_DATA)
-    stats_path = run_params.get("stats_path", STATS_PATH)
+        var_name = _require_param(run_params, "var_name")
+        use_evap = _to_bool(_require_param(run_params, "use_evap"))
+        use_apcp = _to_bool(_require_param(run_params, "use_apcp"))
+        use_static = _to_bool(_require_param(run_params, "use_static_input"))
+        static_data = run_params.get("static_data", None)
+        stats_path = _require_param(run_params, "stats_path")
+        data_root = _require_param(run_params, "data_root")
+    else:
+        cfg = dict(_model_cfg)
+        var_name = VAR_NAME
+        use_evap = USE_EVAP
+        use_apcp = USE_APCP
+        use_static = USE_STATIC
+        static_data = STATIC_DATA
+        stats_path = STATS_PATH
+        data_root = DATA_ROOT
+
     print(
         f"[config] var_name={var_name}, use_evap={use_evap}, use_apcp={use_apcp}, "
-        f"use_static={use_static}, static_data={static_data}, stats_path={stats_path}"
+        f"use_static={use_static}, static_data={static_data}, stats_path={stats_path}, "
+        f"data_root={data_root}"
     )
 
     var_root, evap_root, apcp_root, static_root = _resolve_parflow_roots(
-        DATA_ROOT,
+        data_root,
         var_name=var_name,
         use_evap=use_evap,
         use_apcp=use_apcp,
@@ -517,14 +565,39 @@ def main():
     )
     c_in, h, w = sample.shape
 
-    pre_seq = int(cfg["pre_seq"])
-    aft_seq = int(cfg["after_seq"])
-    out_channels = int(cfg["out_channels"])
+    pre_seq = int(_require_model_cfg_key(cfg, "pre_seq"))
+    aft_seq = int(_require_model_cfg_key(cfg, "after_seq"))
+    out_channels = int(_require_model_cfg_key(cfg, "out_channels"))
+
+    # Strict consistency checks when we claim to follow training config.
+    if USE_MODEL_PARAM_JSON:
+        expected_in = _require_model_cfg_key(cfg, "input_channels")
+        expected_h = _require_model_cfg_key(cfg, "height")
+        expected_w = _require_model_cfg_key(cfg, "width")
+        if int(expected_in) != c_in:
+            raise ValueError(
+                f"Input channels mismatch: model_config.input_channels={expected_in}, "
+                f"but data provides C={c_in}. Check data_root/var_name/use_evap/use_apcp/use_static_input."
+            )
+        if int(expected_h) != h or int(expected_w) != w:
+            raise ValueError(
+                f"Spatial size mismatch: model_config (H,W)=({expected_h},{expected_w}), "
+                f"but data provides ({h},{w})."
+            )
+        if out_channels > c_in:
+            raise ValueError(
+                f"Invalid channel setup: out_channels={out_channels} > input_channels={c_in}."
+            )
 
     total_aft = ROLL_AFT if USE_ROLLOUT else aft_seq
     if end_idx - start_idx + 1 < pre_seq + total_aft:
         raise ValueError("Not enough frames for the requested range and seq lengths")
 
+    if not stats_path or not Path(stats_path).exists():
+        raise FileNotFoundError(
+            f"Stats file not found: {stats_path}. "
+            "When USE_MODEL_PARAM_JSON=True, this path must match training stats_path."
+        )
     stats = np.load(stats_path)
     mean = np.asarray(stats["mean"], dtype=np.float32).reshape(-1)
     std = np.asarray(stats["std"], dtype=np.float32).reshape(-1)
@@ -538,6 +611,7 @@ def main():
     std_y = std[:out_channels]
     mean_y_4d = mean_y.reshape(1, -1, 1, 1)
     std_y_4d = std_y.reshape(1, -1, 1, 1)
+    std_y_eps_4d = std_y_4d + EPS
 
     model = PredFormer_Model(cfg).to(DEVICE)
     ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
@@ -611,18 +685,29 @@ def main():
                 pred_full = np.zeros((aft_seq, out_channels, h, w), dtype=np.float32)
                 counts = np.zeros_like(pred_full, dtype=np.int32)
 
+                t_split_infer_stitch = time.perf_counter()
                 for top, left in coords:
                     x_patch = x[..., top: top + space_h, left: left + space_w]
+                    _cuda_sync()
+                    t_forward = time.perf_counter()
                     with torch.inference_mode():
                         with _autocast_ctx():
                             pred = _predict_rollout(model, x_patch, pre_seq, aft_seq, c_in, out_channels)
+                    _cuda_sync()
+                    forward_time += time.perf_counter() - t_forward
+                    forward_calls += 1
                     pred = pred.squeeze(0).float().cpu().numpy()
                     pred_full[:, :, top: top + space_h, left: left + space_w] += pred
                     counts[:, :, top: top + space_h, left: left + space_w] += 1
 
                 mask = counts > 0
                 pred_full[mask] = pred_full[mask] / counts[mask]
-                pred_full = pred_full * std_y_4d + mean_y_4d
+                split_infer_stitch_time += time.perf_counter() - t_split_infer_stitch
+                split_infer_stitch_blocks += 1
+                split_infer_stitch_patches += len(coords)
+                # Keep inverse transform consistent with training normalization:
+                # y_norm = (y - mean_y) / (std_y + EPS)
+                pred_full = pred_full * std_y_eps_4d + mean_y_4d
 
                 for k in range(block):
                     idx = t0 + pre_seq + predicted + k
@@ -662,18 +747,29 @@ def main():
             pred_full = np.zeros((aft_seq, out_channels, h, w), dtype=np.float32)
             counts = np.zeros_like(pred_full, dtype=np.int32)
 
+            t_split_infer_stitch = time.perf_counter()
             for top, left in coords:
                 x_patch = x[..., top: top + space_h, left: left + space_w]
+                _cuda_sync()
+                t_forward = time.perf_counter()
                 with torch.inference_mode():
                     with _autocast_ctx():
                         pred = _predict_rollout(model, x_patch, pre_seq, aft_seq, c_in, out_channels)
+                _cuda_sync()
+                forward_time += time.perf_counter() - t_forward
+                forward_calls += 1
                 pred = pred.squeeze(0).float().cpu().numpy()
                 pred_full[:, :, top: top + space_h, left: left + space_w] += pred
                 counts[:, :, top: top + space_h, left: left + space_w] += 1
 
             mask = counts > 0
             pred_full[mask] = pred_full[mask] / counts[mask]
-            pred_full = pred_full * std_y_4d + mean_y_4d
+            split_infer_stitch_time += time.perf_counter() - t_split_infer_stitch
+            split_infer_stitch_blocks += 1
+            split_infer_stitch_patches += len(coords)
+            # Keep inverse transform consistent with training normalization:
+            # y_norm = (y - mean_y) / (std_y + EPS)
+            pred_full = pred_full * std_y_eps_4d + mean_y_4d
 
             for k in range(aft_seq):
                 idx = t0 + pre_seq + k
@@ -688,6 +784,25 @@ def main():
 
     elapsed = time.time() - start_time
     print(f"Inference done. Elapsed time: {elapsed:.2f}s")
+    avg_forward = forward_time / forward_calls if forward_calls > 0 else 0.0
+    non_forward = max(0.0, elapsed - forward_time)
+    print(
+        f"[timing] pure_model_forward={forward_time:.2f}s, "
+        f"forward_calls={forward_calls}, avg_forward={avg_forward:.4f}s/call"
+    )
+    avg_block = (
+        split_infer_stitch_time / split_infer_stitch_blocks
+        if split_infer_stitch_blocks > 0
+        else 0.0
+    )
+    patch_split_stitch_only = max(0.0, split_infer_stitch_time - forward_time)
+    print(
+        f"[timing] split_infer_stitch={split_infer_stitch_time:.2f}s, "
+        f"blocks={split_infer_stitch_blocks}, patches={split_infer_stitch_patches}, "
+        f"avg_block={avg_block:.4f}s"
+    )
+    print(f"[timing] patch_split_and_stitch_only={patch_split_stitch_only:.2f}s")
+    print(f"[timing] non_forward_overhead={non_forward:.2f}s")
 
 
 if __name__ == "__main__":
