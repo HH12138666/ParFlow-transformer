@@ -8,9 +8,9 @@ model_config = {
     # 当前这套配置对应 press + evap + static 的输入形式
     'height': 146,
     'width': 252,
-    'input_channels': 42,   # 原始输入总通道 = press 10 + evap 4 + static 28
+    'input_channels': 36,   # 原始输入总通道 = press 10 + evap 4 + static 22
     'dynamic_channels': 14,  # 动态输入通道 = press 10 + evap 4
-    'static_in_channels': 28, # 静态输入通道数
+    'static_in_channels': 22, # 静态输入通道数
     'static_out_channels': 5, # 静态通道经卷积压缩后的输出通道数；若不压缩则设为 None
     'in_channels': 19,   # 送入 patch embedding 的通道 = 动态 10 + 压缩后静态 0
     'out_channels': 10,  # 模型输出通道 = 只预测 press 的 10 层

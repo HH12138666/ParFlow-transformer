@@ -20,7 +20,7 @@ _STATS_CACHE = {}
 EPS = 1e-8
 
 # 数据分割相关设置
-time_stride = 5    # 时间步长，用于数据分割
+time_stride = 6    # 时间步长，用于数据分割
 
 
 # =========================
@@ -96,15 +96,30 @@ def _build_id_map(files, label):
     return items
 
 
+def _filter_files_by_years(files, allowed_years):
+    """按年份过滤文件列表；None 表示保留全部年份。"""
+    if allowed_years is None:
+        return files
+    year_set = {int(year) for year in allowed_years}
+    filtered = [path for path in files if _extract_year(path) in year_set]
+    if not filtered:
+        raise ValueError(f"No files found for allowed_years={sorted(year_set)}.")
+    return filtered
+
+
  # =========================
  # 文件收集与路径解析
  # =========================
 
-def _prepare_press_evap_apcp_files(press_root, evap_root=None, apcp_root=None):
+def _prepare_press_evap_apcp_files(press_root, evap_root=None, apcp_root=None, allowed_years=None):
     """准备主变量与辅助动态文件列表，并按小时 ID 与主变量严格对齐。"""
     press_files = _list_pfb_files(press_root)
     evap_files = _list_pfb_files(evap_root) if evap_root is not None else None
     apcp_files = _list_pfb_files(apcp_root) if apcp_root is not None else None
+
+    press_files = _filter_files_by_years(press_files, allowed_years)
+    evap_files = _filter_files_by_years(evap_files, allowed_years) if evap_files is not None else None
+    apcp_files = _filter_files_by_years(apcp_files, allowed_years) if apcp_files is not None else None
 
     press_map = _build_id_map(press_files, "press")
     press_ids = sorted(press_map)
@@ -616,10 +631,16 @@ def load_data(batch_size, val_batch_size, data_root, num_workers, pre_seq_length
     press_root, evap_root, apcp_root, static_root = _resolve_parflow_roots(
         data_root, use_static=use_static, var_name=var_name, use_evap=use_evap, use_apcp=use_apcp
     )
+    allowed_years = None
+    if str(split_mode).lower() == 'year':
+        train_year_list = _normalize_years(train_years) or []
+        holdout_year_list = _normalize_years(holdout_years) or []
+        allowed_years = sorted(set(train_year_list + holdout_year_list))
     all_press_files, all_evap_files, all_apcp_files = _prepare_press_evap_apcp_files(
         press_root,
         evap_root,
         apcp_root,
+        allowed_years=allowed_years,
     )
     common_ds_kwargs = dict(
         in_shape=in_shape,

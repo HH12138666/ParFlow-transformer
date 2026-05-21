@@ -11,6 +11,14 @@ from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from openstl.modules import Attention, CrossAttention, PreNorm, FeedForward
 import math
 
+
+def _resolve_spatial_dim(value, fallback):
+    return fallback if value is None else value
+
+
+def _align_to_patch(size, patch_size):
+    return int(math.ceil(size / patch_size) * patch_size)
+
 class SwiGLU(nn.Module):
     def __init__(
             self,
@@ -94,10 +102,12 @@ class PredFormer_Model(nn.Module):
         # dimensions for patching and positional embeddings so they match the
         # runtime input shape.
         self.patch_size = model_config['patch_size']
-        self.valid_height = model_config.get('space_h', model_config['height'])
-        self.valid_width = model_config.get('space_w', model_config['width'])
-        self.image_height = self.valid_height
-        self.image_width = self.valid_width
+        self.valid_height = _resolve_spatial_dim(model_config.get('space_h'), model_config['height'])
+        self.valid_width = _resolve_spatial_dim(model_config.get('space_w'), model_config['width'])
+        self.image_height = _align_to_patch(self.valid_height, self.patch_size)
+        self.image_width = _align_to_patch(self.valid_width, self.patch_size)
+        self.pad_h = self.image_height - self.valid_height
+        self.pad_w = self.image_width - self.valid_width
         self.num_patches_h = self.image_height // self.patch_size
         self.num_patches_w = self.image_width // self.patch_size
         self.num_patches = self.num_patches_h * self.num_patches_w
@@ -154,8 +164,6 @@ class PredFormer_Model(nn.Module):
         self.Ndepth = model_config['Ndepth']  # Ensure this is defined
         self.depth = model_config['depth']  # Ensure this is defined
         
-        assert self.image_height % self.patch_size == 0, 'Image height must be divisible by the patch size.'
-        assert self.image_width % self.patch_size == 0, 'Image width must be divisible by the patch size.'
         self.patch_dim = self.in_channels * self.patch_size ** 2
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b t c (h p1) (w p2) -> b t (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size),
@@ -206,21 +214,29 @@ class PredFormer_Model(nn.Module):
         B, T, C, H, W = x.shape
         if C != self.input_channels:
             raise ValueError(f"Expected input channels={self.input_channels}, got {C}")
-        if H != self.image_height or W != self.image_width:
+        valid_input = (H == self.valid_height and W == self.valid_width)
+        padded_input = (H == self.image_height and W == self.image_width)
+        if not (valid_input or padded_input):
             raise ValueError(
-                f"Expected spatial size {(self.image_height, self.image_width)}, got {(H, W)}. "
-                f"Check patch_size={self.patch_size}, "
-                f"and dataloader padding settings."
+                f"Expected spatial size {(self.valid_height, self.valid_width)} or "
+                f"{(self.image_height, self.image_width)}, got {(H, W)}. "
+                f"Check patch_size={self.patch_size} and spatial input settings."
             )
+        input_h, input_w = H, W
+        if valid_input and (self.pad_h or self.pad_w):
+            x = x.reshape(B * T, C, H, W)
+            x = F.pad(x, (0, self.pad_w, 0, self.pad_h), mode='replicate')
+            x = x.reshape(B, T, C, self.image_height, self.image_width)
+        H_pad, W_pad = self.image_height, self.image_width
         dyn = None
         static = None
         if self.static_in_channels is not None:
             dyn = x[:, :, :self.dynamic_channels]
             static = x[:, :, self.dynamic_channels:self.dynamic_channels + self.static_in_channels]
         if self.static_proj is not None:
-            static = static.reshape(B * T, self.static_in_channels, H, W)
+            static = static.reshape(B * T, self.static_in_channels, H_pad, W_pad)
             static = self.static_proj(static)
-            static = static.reshape(B, T, self.static_out_channels, H, W)
+            static = static.reshape(B, T, self.static_out_channels, H_pad, W_pad)
             x = torch.cat([dyn, static], dim=2)
         if x.shape[2] != self.in_channels:
             raise ValueError(f"Expected projected channels={self.in_channels}, got {x.shape[2]}")
@@ -276,7 +292,8 @@ class PredFormer_Model(nn.Module):
         # MLP head        
         x = self.mlp_head(x_ts.reshape(-1, self.dim))
         x = x.view(B, T, self.num_patches_h, self.num_patches_w, self.out_channels, self.patch_size, self.patch_size)
-        x = x.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, T, self.out_channels, H, W)
-        
+        x = x.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, T, self.out_channels, H_pad, W_pad)
+        if valid_input and (self.pad_h or self.pad_w):
+            x = x[:, :, :, :input_h, :input_w]
         return x
     

@@ -14,4 +14,6 @@ stats/
 stats_daily/
 prev_result_analyze/
 inference_data_bar/
+new_result_analyze/
+new_stats/
 

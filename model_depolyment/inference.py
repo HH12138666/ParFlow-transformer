@@ -19,17 +19,18 @@ from openstl.models import PredFormer_Model
 from parflow.tools.fs import get_absolute_path
 from parflow.tools.io import read_pfb, write_pfb
 
+
 #sbatch /home/huanghui/data/slurm_job/inference.sh
 # ---- User configuration ----
 # Training output dir (contains timestamp subdirs with checkpoint.pth)
 WORK_DIR = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press"
-CHECKPOINT_NAME = "2026-04-06-22-11_FACTS"
+CHECKPOINT_NAME = "2026-05-05-13-00_FACTS"
 CHECKPOINT_PATH = os.path.join(WORK_DIR, CHECKPOINT_NAME, "checkpoint.pth")
 
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
 OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press"
-RUN_PARAM = "test_inference"  
-
+RUN_PARAM = "new_lastest_press_evap_static_train1_19_20_post_cross_cnn5_k3"  
+#press_evap_static_train1_19_20_post_cross_cnn5_k3_h60_w84_sh_30_sw42_in12_out12_rollout720
 # Must match current training data pipeline
 # VAR_NAME = "press"
 # USE_EVAP = False
@@ -42,8 +43,8 @@ STATS_PATH = ""
 EPS = 1e-8
 
 # Prediction range (parsed from filename tail digits, e.g., 20190001)
-START_HOUR = 20192788
-END_HOUR = 20193520
+START_HOUR = 20214388
+END_HOUR = 20218760
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

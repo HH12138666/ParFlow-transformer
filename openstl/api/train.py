@@ -97,11 +97,13 @@ class BaseExperiment(object):
         self._get_data(dataloaders)
         # build the method
         self._build_method()
-        # resume traing
+        # resume training / finetune from pretrained weights
         if self.args.auto_resume:
             self.args.resume_from = osp.join(self.checkpoints_path, 'latest.pth')
         if self.args.resume_from is not None:
             self._load(name=self.args.resume_from)
+        elif getattr(self.args, 'finetune_from', None) is not None:
+            self._load_pretrained_weights(self.args.finetune_from)
 
     def _build_method(self):
         self.steps_per_epoch = len(self.train_loader)
@@ -162,6 +164,27 @@ class BaseExperiment(object):
         model_to_load = self.method.model.module if hasattr(self.method.model, 'module') else self.method.model
         model_to_load.load_state_dict(state_dict)
 
+    def _load_pretrained_weights(self, name=''):
+        """Load only model weights for finetuning.
+
+        Unlike ``_load``, this will not restore optimizer, scheduler, or epoch
+        state, so the current run starts a fresh optimization process while
+        reusing pretrained parameters.
+        """
+        filename = name if osp.isfile(name) else osp.join(self.checkpoints_path, name + '.pth')
+        checkpoint = torch.load(filename, map_location=self.device)
+
+        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        elif isinstance(checkpoint, dict):
+            state_dict = checkpoint
+        else:
+            raise RuntimeError(f'No state_dict found in checkpoint file {filename}')
+
+        self._load_from_state_dict(state_dict)
+        self._epoch = 0
+        print_log(f'Loaded pretrained weights for finetuning from: {filename}')
+
     def _load_best_checkpoint(self):
         best_model_path = osp.join(self.path, 'checkpoint.pth')
         self._load_from_state_dict(torch.load(best_model_path, map_location=self.device))
@@ -170,19 +193,13 @@ class BaseExperiment(object):
         """Plot the basic infomation of supported methods"""
         T, C, H, W = self.args.in_shape
         # When spatial tiling is enabled, the model operates on cropped windows
-        # rather than the full frame size described by ``in_shape``. Use the
-        # configured spatial crop to build the dummy tensor for FLOP/FPS
-        # reporting so that positional embeddings match the actual model input
-        # shape, while keeping ``in_shape`` available for full-frame metadata
-        # (e.g., stitching tiles back together during evaluation).
+        # rather than the full frame size described by ``in_shape``.
         crop_h = getattr(self.args, 'space_h', None)
         crop_w = getattr(self.args, 'space_w', None)
         use_crop = crop_h is not None and crop_w is not None
         dummy_h = crop_h if use_crop else H
         dummy_w = crop_w if use_crop else W
         model_ref = self.method.model.module if hasattr(self.method.model, 'module') else self.method.model
-        dummy_h = getattr(model_ref, 'image_height', dummy_h)
-        dummy_w = getattr(model_ref, 'image_width', dummy_w)
 
         if self.args.method in ['predformer']:
             input_dummy = torch.ones(1, self.args.pre_seq_length, C, dummy_h, dummy_w).to(self.device)
@@ -203,7 +220,11 @@ class BaseExperiment(object):
 
     def train(self):
         """Training loops of STL methods"""
-        recorder = Recorder(verbose=True, early_stop_time=min(self._max_epochs // 10, 10))
+        recorder = Recorder(
+            verbose=True,
+            early_stop_time=min(self._max_epochs // 10, 10),
+            monitor_name='rmse',
+        )
         num_updates = self._epoch * self.steps_per_epoch
         early_stop = False
         for epoch in range(self._epoch, self._max_epochs):
@@ -219,11 +240,22 @@ class BaseExperiment(object):
                     cur_lr = self.method.current_lr()
                     cur_lr = sum(cur_lr) / len(cur_lr)
                     with torch.no_grad():
-                        vali_loss = self.vali()
+                        vali_stats = self.vali()
+                    vali_loss = vali_stats['loss']
+                    vali_rmse = vali_stats['rmse']
 
-                    print_log('Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | Vali Loss: {4:.7f}\n'.format(
-                        epoch + 1, len(self.train_loader), cur_lr, loss_mean.avg, vali_loss))
-                    early_stop = recorder(vali_loss, self.method.model, self.path)
+                    print_log(
+                        'Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | '
+                        'Vali Loss: {4:.7f} | Vali RMSE: {5:.7f}\n'.format(
+                            epoch + 1,
+                            len(self.train_loader),
+                            cur_lr,
+                            loss_mean.avg,
+                            vali_loss,
+                            vali_rmse,
+                        )
+                    )
+                    early_stop = recorder(vali_rmse, self.method.model, self.path)
                     self._save(name='latest')
 
                 if self._distributed:
@@ -264,7 +296,10 @@ class BaseExperiment(object):
         
         print_log('val\t '+eval_log)
 
-        return results['loss'].mean()
+        return {
+            'loss': float(results['loss'].mean()),
+            'rmse': float(eval_res['rmse']),
+        }
 
     def test(self):
         """A testing loop of STL methods"""

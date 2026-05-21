@@ -34,6 +34,8 @@ def create_parser():
     parser.add_argument('--empty_cache', action='store_true', default=True,
                         help='Whether to empty cuda cache after GPU training')
     parser.add_argument('--resume_from', type=str, default=None, help='the checkpoint file to resume from')
+    parser.add_argument('--finetune_from', type=str, default=None,
+                        help='Load only model weights from a checkpoint for finetuning')
     parser.add_argument('--auto_resume', action='store_true', default=False,
                         help='When training was interupted, resume from the latest checkpoint')
     parser.add_argument('--test', action='store_true', default=False, help='Only performs testing')
@@ -181,6 +183,7 @@ def default_parser():
         'fps': False,
         'empty_cache': True,
         'resume_from': None,
+        'finetune_from': None,
         'auto_resume': False,
         'test': False,
         'inference': False,
