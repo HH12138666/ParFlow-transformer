@@ -128,7 +128,7 @@ class BaseExperiment(object):
         else:
             self.train_loader, self.vali_loader, self.test_loader = dataloaders
 
-        if self.vali_loader is None:
+        if self.vali_loader is None and getattr(self.args, 'use_val', True):
             self.vali_loader = self.test_loader
         self._max_iters = self._max_epochs * len(self.train_loader)
 
@@ -144,21 +144,26 @@ class BaseExperiment(object):
             'scheduler': self.method.scheduler.state_dict()}
         torch.save(checkpoint, osp.join(self.checkpoints_path, name + '.pth'))
 
+    def _resolve_checkpoint_path(self, name):
+        if osp.isfile(name):
+            return name
+        filename = osp.join(self.checkpoints_path, name + '.pth')
+        if not osp.isfile(filename):
+            raise FileNotFoundError(f'Checkpoint not found: {filename}')
+        return filename
+
     def _load(self, name=''):
-        """Loading models from the checkpoint"""
-        filename = name if osp.isfile(name) else osp.join(self.checkpoints_path, name + '.pth')
-        try:
-            checkpoint = torch.load(filename, map_location=self.device)
-        except:
-            return
-        # OrderedDict is a subclass of dict
-        if not isinstance(checkpoint, dict):
+        """Loading models from the checkpoint."""
+        filename = self._resolve_checkpoint_path(name)
+        checkpoint = torch.load(filename, map_location=self.device)
+        if not isinstance(checkpoint, dict) or 'state_dict' not in checkpoint:
             raise RuntimeError(f'No state_dict found in checkpoint file {filename}')
         self._load_from_state_dict(checkpoint['state_dict'])
         if checkpoint.get('epoch', None) is not None:
             self._epoch = checkpoint['epoch']
             self.method.model_optim.load_state_dict(checkpoint['optimizer'])
             self.method.scheduler.load_state_dict(checkpoint['scheduler'])
+        print_log(f'Loaded checkpoint for resume from: {filename}')
 
     def _load_from_state_dict(self, state_dict):
         model_to_load = self.method.model.module if hasattr(self.method.model, 'module') else self.method.model
@@ -189,6 +194,10 @@ class BaseExperiment(object):
         best_model_path = osp.join(self.path, 'checkpoint.pth')
         self._load_from_state_dict(torch.load(best_model_path, map_location=self.device))
 
+    def _load_latest_checkpoint(self):
+        latest_model_path = osp.join(self.checkpoints_path, 'latest.pth')
+        self._load_from_state_dict(torch.load(latest_model_path, map_location=self.device)['state_dict'])
+
     def display_method_info(self):
         """Plot the basic infomation of supported methods"""
         T, C, H, W = self.args.in_shape
@@ -218,67 +227,119 @@ class BaseExperiment(object):
         print_log('Model info:\n' + info+'\n' + flops+'\n' + fps + dash_line)
 
 
-    def train(self):
-        """Training loops of STL methods"""
+    def _after_training(self, load_best=False):
+        if self._distributed:
+            barrier()
+        if not check_dir(self.path):
+            assert False and "Exit training because work_dir is removed"
+        if self._distributed and hasattr(self.method.model, 'module'):
+            self.method.model = self.method.model.module
+        if load_best:
+            self._load_best_checkpoint()
+        time.sleep(1)
+
+    def _current_lr_mean(self):
+        cur_lr = self.method.current_lr()
+        return sum(cur_lr) / len(cur_lr)
+
+    def _train_with_val(self, num_updates):
         recorder = Recorder(
             verbose=True,
             early_stop_time=min(self._max_epochs // 10, 10),
             monitor_name='rmse',
         )
-        num_updates = self._epoch * self.steps_per_epoch
         early_stop = False
         for epoch in range(self._epoch, self._max_epochs):
-            if self._distributed and hasattr(self.train_loader, 'sampler') and hasattr(self.train_loader.sampler, 'set_epoch'):
-                self.train_loader.sampler.set_epoch(epoch)
-            num_updates, loss_mean = self.method.train_one_epoch(
-                self, self.train_loader, epoch, num_updates
-            )
-
-            self._epoch = epoch
+            num_updates, loss_mean = self._run_train_epoch(epoch, num_updates)
             if epoch % self.args.log_step == 0:
-                if self._rank == 0:
-                    cur_lr = self.method.current_lr()
-                    cur_lr = sum(cur_lr) / len(cur_lr)
-                    with torch.no_grad():
-                        vali_stats = self.vali()
-                    vali_loss = vali_stats['loss']
-                    vali_rmse = vali_stats['rmse']
-
-                    print_log(
-                        'Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | '
-                        'Vali Loss: {4:.7f} | Vali RMSE: {5:.7f}\n'.format(
-                            epoch + 1,
-                            len(self.train_loader),
-                            cur_lr,
-                            loss_mean.avg,
-                            vali_loss,
-                            vali_rmse,
-                        )
-                    )
-                    early_stop = recorder(vali_rmse, self.method.model, self.path)
-                    self._save(name='latest')
-
-                if self._distributed:
-                    stop_tensor = torch.tensor(int(early_stop), device=self.device)
-                    dist.broadcast(stop_tensor, src=0)
-                    early_stop = bool(stop_tensor.item())
-
-                    
+                early_stop = self._run_val_logging(epoch, loss_mean, recorder)
             if self._use_gpu and self.args.empty_cache:
                 torch.cuda.empty_cache()
-            if epoch > self._early_stop and early_stop:  # early stop training
-                #print_log('Early stop training at f{} epoch'.format(epoch))
+            if epoch > self._early_stop and early_stop:
                 print_log('Early stop training at {} epoch'.format(epoch + 1))
                 break
-            
+        self._after_training(load_best=True)
+
+    def _train_fixed_epoch(self, num_updates):
+        save_interval = int(getattr(self.args, 'save_interval', 1))
+        test_interval = int(getattr(self.args, 'test_interval', 0))
+        if save_interval <= 0:
+            raise ValueError(f'save_interval must be positive, got {save_interval}')
+        if test_interval < 0:
+            raise ValueError(f'test_interval must be >= 0, got {test_interval}')
+        for epoch in range(self._epoch, self._max_epochs):
+            num_updates, loss_mean = self._run_train_epoch(epoch, num_updates)
+            if epoch % self.args.log_step == 0 and self._rank == 0:
+                self._log_train_only_epoch(epoch, loss_mean)
+            if (epoch + 1) % save_interval == 0:
+                self._save(name=f'epoch_{epoch + 1:04d}')
+                self._save(name='latest')
+            if test_interval > 0 and (epoch + 1) % test_interval == 0 and self._rank == 0:
+                print_log(f'test_monitoring at epoch {epoch + 1}: not used for checkpoint selection')
+                with torch.no_grad():
+                    self.test()
+            if self._use_gpu and self.args.empty_cache:
+                torch.cuda.empty_cache()
+        self._save(name='latest')
+        self._after_training(load_best=False)
+
+    def _run_train_epoch(self, epoch, num_updates):
+        if self._distributed and hasattr(self.train_loader, 'sampler'):
+            if hasattr(self.train_loader.sampler, 'set_epoch'):
+                self.train_loader.sampler.set_epoch(epoch)
+        num_updates, loss_mean = self.method.train_one_epoch(
+            self, self.train_loader, epoch, num_updates
+        )
+        self._epoch = epoch
+        return num_updates, loss_mean
+
+    def _run_val_logging(self, epoch, loss_mean, recorder):
+        early_stop = False
+        if self._rank == 0:
+            with torch.no_grad():
+                vali_stats = self.vali()
+            self._log_val_epoch(epoch, loss_mean, vali_stats)
+            early_stop = recorder(vali_stats['rmse'], self.method.model, self.path)
+            self._save(name='latest')
         if self._distributed:
-            barrier()
-        if not check_dir(self.path):  # exit training when work_dir is removed
-            assert False and "Exit training because work_dir is removed"
-        if self._distributed and hasattr(self.method.model, 'module'):
-            self.method.model = self.method.model.module
-        self._load_best_checkpoint()
-        time.sleep(1)  # wait for asynchronous loggers to flush
+            stop_tensor = torch.tensor(int(early_stop), device=self.device)
+            dist.broadcast(stop_tensor, src=0)
+            early_stop = bool(stop_tensor.item())
+        return early_stop
+
+    def _log_val_epoch(self, epoch, loss_mean, vali_stats):
+        print_log(
+            'Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | '
+            'Vali Loss: {4:.7f} | Vali RMSE: {5:.7f}\n'.format(
+                epoch + 1,
+                len(self.train_loader),
+                self._current_lr_mean(),
+                loss_mean.avg,
+                vali_stats['loss'],
+                vali_stats['rmse'],
+            )
+        )
+
+    def _log_train_only_epoch(self, epoch, loss_mean):
+        print_log(
+            'Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | '
+            'Val disabled: fixed-epoch training, latest checkpoint will be reported\n'.format(
+                epoch + 1,
+                len(self.train_loader),
+                self._current_lr_mean(),
+                loss_mean.avg,
+            )
+        )
+
+    def train(self):
+        """Training loops of STL methods."""
+        num_updates = self._epoch * self.steps_per_epoch
+        if getattr(self.args, 'use_val', True):
+            print_log('Training mode: validation + early stopping/checkpoint selection')
+            self._train_with_val(num_updates)
+            return
+        print_log('Training mode: fixed epoch, validation disabled, latest checkpoint reported')
+        self._train_fixed_epoch(num_updates)
 
     def vali(self):
         """A validation loop during training"""
@@ -304,7 +365,10 @@ class BaseExperiment(object):
     def test(self):
         """A testing loop of STL methods"""
         if self.args.test:
-            self._load_best_checkpoint()
+            if getattr(self.args, 'use_val', True):
+                self._load_best_checkpoint()
+            else:
+                self._load_latest_checkpoint()
 
         t0 = time.time()
         results = self.method.test_one_epoch(self, self.test_loader)
@@ -319,4 +383,8 @@ class BaseExperiment(object):
         print_log(eval_log)
         # Saving test outputs is intentionally disabled.
 
-        return eval_res['mse']
+        if 'rmse' not in eval_res:
+            raise KeyError(
+                "Test metric_dict must contain 'rmse' because ParFlow metrics are configured as ['mae', 'rmse']."
+            )
+        return eval_res['rmse']

@@ -62,304 +62,233 @@ class Base_method(object):
         raise NotImplementedError
 
     def _nondist_forward_collect(self, data_loader, length=None):
-        """Forward and collect predictios.
-
-        Args:
-            data_loader: dataloader of evaluation.
-            length (int): Expected length of output arrays.
-
-        Returns:
-            results_all (dict(np.ndarray)): The concatenated outputs.
-        """
+        """Forward non-spatial evaluation samples and collect arrays."""
         dataset = data_loader.dataset
         if getattr(dataset, 'use_space', False):
-            return self._stream_spatial_forward_collect(data_loader, length)
+            raise RuntimeError('Spatial evaluation must use streaming full-frame metrics.')
 
-        # preparation
-        dataset = data_loader.dataset
         results = []
         prog_bar = ProgressBar(len(data_loader))
-        length = len(dataset) if length is None else length
-        # collect all patch-level outputs first, then merge them after the full pass
         for batch_x, batch_y in data_loader:
-            with torch.no_grad():
-                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+            with torch.inference_mode():
+                batch_x = batch_x.to(self.device)
+                batch_y = batch_y.to(self.device)
                 pred_y = self._predict(batch_x, batch_y)
-                batch_y_eval = batch_y
-                pred_y_eval = pred_y
 
-            if pred_y_eval.shape[2] != batch_y_eval.shape[2]:
-                raise ValueError(
-                    f"Loss expects matching output channels, got "
-                    f"{pred_y_eval.shape[2]} (pred) and {batch_y_eval.shape[2]} (true)."
-                )
-            loss_value = self.criterion(
-                pred_y_eval,
-                batch_y_eval,
-            ).detach().cpu().numpy().reshape(1)
-            results.append(dict(zip(['preds', 'trues', 'loss'],
-                                    [pred_y_eval.cpu().numpy(), batch_y_eval.cpu().numpy(), loss_value])))
-
+            self._check_eval_channels(pred_y, batch_y)
+            loss_value = self.criterion(pred_y, batch_y).detach().cpu().numpy().reshape(1)
+            results.append({
+                'preds': pred_y.cpu().numpy(),
+                'trues': batch_y.cpu().numpy(),
+                'loss': loss_value,
+            })
             prog_bar.update()
             if self.args.empty_cache:
                 torch.cuda.empty_cache()
 
-        results_all = {}
-        for k in results[0].keys():
-            results_all[k] = np.concatenate([batch[k] for batch in results], axis=0)
-        results_all = self._merge_spatial_results(results_all, dataset)
-        return results_all
+        if not results:
+            return self._empty_array_results()
+        return {key: np.concatenate([item[key] for item in results], axis=0)
+                for key in results[0].keys()}
 
-    def _stream_spatial_forward_collect(self, data_loader, length=None):
-        """Forward spatial patches and merge them into full frames on the fly."""
-        dataset = data_loader.dataset
-        prog_bar = ProgressBar(len(data_loader))
-        sample_count = len(getattr(dataset, 'sample_indices', []))
-        if sample_count == 0:
-            return {
-                'preds': np.empty((0,), dtype=np.float32),
-                'trues': np.empty((0,), dtype=np.float32),
-                'loss': np.empty((0,), dtype=np.float32),
-            }
-
-        merged_preds = None
-        merged_trues = None
-        counts = None
-        loss_values = []
-        offset = 0
-
-        for batch_x, batch_y in data_loader:
-            with torch.no_grad():
-                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
-                pred_y = self._predict(batch_x, batch_y)
-                batch_y_eval = batch_y
-                pred_y_eval = pred_y
-
-            if pred_y_eval.shape[2] != batch_y_eval.shape[2]:
-                raise ValueError(
-                    f"Loss expects matching output channels, got "
-                    f"{pred_y_eval.shape[2]} (pred) and {batch_y_eval.shape[2]} (true)."
-                )
-
-            loss_value = self.criterion(
-                pred_y_eval,
-                batch_y_eval,
-            ).detach().cpu().numpy().reshape(1)
-            loss_values.append(loss_value)
-
-            pred_np = pred_y_eval.cpu().numpy()
-            true_np = batch_y_eval.cpu().numpy()
-            batch_n = pred_np.shape[0]
-
-            if merged_preds is None:
-                merged_shape = (
-                    dataset.num_sequences,
-                    pred_np.shape[1],
-                    pred_np.shape[2],
-                    dataset.H,
-                    dataset.W,
-                )
-                merged_preds = np.zeros(merged_shape, dtype=pred_np.dtype)
-                merged_trues = np.zeros_like(merged_preds)
-                counts = np.zeros((dataset.num_sequences, dataset.H, dataset.W), dtype=np.int32)
-
-            end = min(offset + batch_n, sample_count)
-            valid_n = end - offset
-            slots = dataset.merge_slots[offset:end]
-            tops = dataset.merge_tops[offset:end]
-            lefts = dataset.merge_lefts[offset:end]
-
-            for i in range(valid_n):
-                slot = slots[i]
-                top = tops[i]
-                left = lefts[i]
-                bottom = top + dataset.space_h
-                right = left + dataset.space_w
-                merged_preds[slot, :, :, top:bottom, left:right] += pred_np[i]
-                merged_trues[slot, :, :, top:bottom, left:right] += true_np[i]
-                counts[slot, top:bottom, left:right] += 1
-
-            offset = end
-            prog_bar.update()
-            if self.args.empty_cache:
-                torch.cuda.empty_cache()
-
-        if merged_preds is None or merged_trues is None or counts is None:
-            return {
-                'preds': np.empty((0,), dtype=np.float32),
-                'trues': np.empty((0,), dtype=np.float32),
-                'loss': np.concatenate(loss_values, axis=0) if loss_values else np.empty((0,), dtype=np.float32),
-            }
-
-        counts_5d = counts[:, None, None, :, :]
-        post_bar = ProgressBar(2)
-        merged_preds = np.divide(
-            merged_preds,
-            counts_5d,
-            out=np.zeros_like(merged_preds),
-            where=counts_5d > 0,
+    def _check_eval_channels(self, pred_y, true_y):
+        if pred_y.shape[2] == true_y.shape[2]:
+            return
+        raise ValueError(
+            f"Loss expects matching output channels, got "
+            f"{pred_y.shape[2]} (pred) and {true_y.shape[2]} (true)."
         )
-        post_bar.update()
-        merged_trues = np.divide(
-            merged_trues,
-            counts_5d,
-            out=np.zeros_like(merged_trues),
-            where=counts_5d > 0,
-        )
-        post_bar.update()
-        post_bar.file.write('\n')
 
+    def _empty_array_results(self):
         return {
-            'preds': merged_preds,
-            'trues': merged_trues,
-            'loss': np.concatenate(loss_values, axis=0),
+            'preds': np.empty((0,), dtype=np.float32),
+            'trues': np.empty((0,), dtype=np.float32),
+            'loss': np.empty((0,), dtype=np.float32),
         }
 
-    def _merge_spatial_results(self, results_all, dataset):
-        """Reconstruct full-frame samples from spatially split patches.
+    def _stream_spatial_metric_collect(self, data_loader):
+        """Evaluate spatial windows by finalizing one full-frame time sample at a time."""
+        dataset = data_loader.dataset
+        sample_count = len(getattr(dataset, 'sample_indices', []))
+        if sample_count == 0:
+            return self._make_metric_results({}, [], '')
 
-        Args:
-            results_all (dict): Concatenated outputs from the dataloader.
-            dataset: Dataset instance that may contain spatial split metadata.
+        state = self._new_spatial_stream_state(dataset)
+        loss_values = []
+        offset = 0
+        prog_bar = ProgressBar(len(data_loader))
+        for batch_x, batch_y in data_loader:
+            pred_y, batch_y = self._eval_batch(batch_x, batch_y)
+            loss_values.append(self.criterion(pred_y, batch_y).detach().cpu().numpy().reshape(1))
+            offset = self._consume_spatial_batch(dataset, state, pred_y, batch_y, offset)
+            prog_bar.update()
 
-        Returns:
-            dict: Potentially merged results with full-frame tensors and updated loss/metrics.
-        """
-        if not getattr(dataset, 'use_space', False):
-            return results_all
+        if offset != sample_count:
+            raise ValueError(f'Spatial stream consumed {offset} samples, expected {sample_count}.')
+        self._finalize_active_spatial_slot(state)
+        eval_res = self._compute_stream_metrics(state['metric_sums'])
+        return self._make_metric_results(eval_res, loss_values, self._format_eval_log(eval_res))
 
-        sample_indices = getattr(dataset, 'sample_indices', [])
-        coords = getattr(dataset, 'space_coords', [(0, 0)])
-        sample_count = len(results_all.get('preds', []))
-        if len(sample_indices) == 0 or sample_count == 0:
-            return results_all
+    def _eval_batch(self, batch_x, batch_y):
+        with torch.inference_mode():
+            batch_x = batch_x.to(self.device)
+            batch_y = batch_y.to(self.device)
+            pred_y = self._predict(batch_x, batch_y)
+        self._check_eval_channels(pred_y, batch_y)
+        return pred_y, batch_y
 
-        # Align to the actually collected samples to avoid indexing errors
+    def _new_spatial_stream_state(self, dataset):
+        return {
+            'active_slot': None,
+            'finalized_slots': set(),
+            'pred_buffer': None,
+            'true_buffer': None,
+            'counts': None,
+            'dataset': dataset,
+            'metric_sums': {'abs': 0.0, 'sq': 0.0, 'denom': 0.0},
+        }
 
-        if sample_count != len(sample_indices):
-            print(f"Warning: sample count ({sample_count}) does not match "
-                  f"sample_indices length ({len(sample_indices)}). "
-                  f"Truncating sample_indices.")
-            sample_indices = sample_indices[:sample_count]
+    def _consume_spatial_batch(self, dataset, state, pred_y, true_y, offset):
+        pred_np = pred_y.cpu().numpy()
+        true_np = true_y.cpu().numpy()
+        batch_n = pred_np.shape[0]
+        end = offset + batch_n
+        sample_count = len(getattr(dataset, 'sample_indices', []))
+        if end > sample_count:
+            raise ValueError(f'Batch exceeds spatial sample plan: end={end}, sample_count={sample_count}')
 
-        # Build a robust mapping from raw time indices to contiguous slots
-        # based on the actually available samples.
-        if sample_indices and isinstance(sample_indices[0], tuple):
-            time_slots = sorted({t for t, _ in sample_indices})
-        else:
-            time_slots = sorted(set(sample_indices))
+        slots = dataset.merge_slots[offset:end]
+        tops = dataset.merge_tops[offset:end]
+        lefts = dataset.merge_lefts[offset:end]
+        for i in range(batch_n):
+            self._consume_spatial_patch(state, int(slots[i]), int(tops[i]), int(lefts[i]), pred_np[i], true_np[i])
+        return end
 
-        time_to_slot = {t: i for i, t in enumerate(time_slots)}
-        num_sequences = len(time_slots)
+    def _consume_spatial_patch(self, state, slot, top, left, pred_patch, true_patch):
+        if state['active_slot'] is None:
+            self._start_spatial_slot(state, slot, pred_patch)
+        elif slot != state['active_slot']:
+            self._finalize_active_spatial_slot(state)
+            self._start_spatial_slot(state, slot, pred_patch)
+        self._add_spatial_patch(state, top, left, pred_patch, true_patch)
 
+    def _start_spatial_slot(self, state, slot, pred_patch):
+        if slot in state['finalized_slots']:
+            raise ValueError(f'Spatial slot {slot} is not contiguous in evaluation loader.')
+        dataset = state['dataset']
+        state['active_slot'] = slot
+        buffer_shape = (pred_patch.shape[0], pred_patch.shape[1], dataset.H, dataset.W)
+        state['pred_buffer'] = np.zeros(buffer_shape, dtype=pred_patch.dtype)
+        state['true_buffer'] = np.zeros(buffer_shape, dtype=pred_patch.dtype)
+        state['counts'] = np.zeros((dataset.H, dataset.W), dtype=np.int32)
 
-        space_h = dataset.space_h
-        space_w = dataset.space_w
-        full_h, full_w = dataset.H, dataset.W
+    def _add_spatial_patch(self, state, top, left, pred_patch, true_patch):
+        dataset = state['dataset']
+        bottom = top + dataset.space_h
+        right = left + dataset.space_w
+        state['pred_buffer'][:, :, top:bottom, left:right] += pred_patch
+        state['true_buffer'][:, :, top:bottom, left:right] += true_patch
+        state['counts'][top:bottom, left:right] += 1
 
-        def _merge_tensor(arr, seq_len):
-            if arr.size == 0:
-                return arr
-            channels = arr.shape[2]
-            merged = np.zeros((num_sequences, seq_len, channels, full_h, full_w), dtype=arr.dtype)
-            counts = np.zeros_like(merged, dtype=np.int32)
+    def _finalize_active_spatial_slot(self, state):
+        if state['active_slot'] is None:
+            return
+        counts = state['counts']
+        if np.any(counts <= 0):
+            raise ValueError(f"Spatial slot {state['active_slot']} has uncovered pixels.")
+        counts_4d = counts[None, None, :, :]
+        pred_full = state['pred_buffer'] / counts_4d
+        true_full = state['true_buffer'] / counts_4d
+        self._update_stream_metric_sums(state['metric_sums'], pred_full, true_full, state['dataset'])
+        state['finalized_slots'].add(state['active_slot'])
+        state['active_slot'] = None
+        state['pred_buffer'] = None
+        state['true_buffer'] = None
+        state['counts'] = None
 
-            for idx, (t_idx, p_idx) in enumerate(sample_indices[: len(arr)]):
-                slot = time_to_slot.get(t_idx)
-                if slot is None:
-                    continue
-                top, left = coords[p_idx]
-                merged[slot, :, :, top: top + space_h, left: left + space_w] += arr[idx]
-                counts[slot, :, :, top: top + space_h, left: left + space_w] += 1
+    def _update_stream_metric_sums(self, sums, pred, true, dataset):
+        diff = pred.astype(np.float64) - true.astype(np.float64)
+        std = self._output_std(dataset, diff.shape[1])
+        if std is not None:
+            diff *= std
+        sums['abs'] += np.abs(diff).sum(dtype=np.float64)
+        sums['sq'] += np.square(diff).sum(dtype=np.float64)
+        sums['denom'] += diff.size if self.spatial_norm else diff.shape[0]
 
-            # Avoid division-by-zero by keeping untouched regions at zero when no
-            # tiles were written (should not happen for valid tiling setups).
-            mask = counts > 0
-            merged[mask] = merged[mask] / counts[mask]
-            return merged
+    def _output_std(self, dataset, channels):
+        std = getattr(dataset, 'std', None)
+        if std is None:
+            return None
+        std = np.asarray(std, dtype=np.float64)
+        if channels > std.shape[0]:
+            raise ValueError(f'Output channels {channels} exceed std channels {std.shape[0]}.')
+        return std[:channels].reshape(1, channels, 1, 1)
 
-        results_all['preds'] = _merge_tensor(results_all['preds'], dataset.aft)
-        results_all['trues'] = _merge_tensor(results_all['trues'], dataset.aft)
+    def _compute_stream_metrics(self, sums):
+        if sums['denom'] <= 0:
+            raise ValueError('Cannot compute metrics with zero denominator.')
+        eval_res = {}
+        invalid = set(self.metric_list) - {'mae', 'mse', 'rmse'}
+        if invalid:
+            raise ValueError(f'metric {invalid} is not supported.')
+        if 'mse' in self.metric_list:
+            eval_res['mse'] = sums['sq'] / sums['denom']
+        if 'mae' in self.metric_list:
+            eval_res['mae'] = sums['abs'] / sums['denom']
+        if 'rmse' in self.metric_list:
+            eval_res['rmse'] = np.sqrt(sums['sq'] / sums['denom'])
+        return eval_res
 
-        return results_all
+    def _format_eval_log(self, eval_res):
+        return ', '.join(f'{key}:{eval_res[key]}' for key in eval_res)
+
+    def _make_metric_results(self, eval_res, loss_values, eval_log):
+        results = {'metric_dict': eval_res, 'eval_log': eval_log}
+        results['loss'] = np.concatenate(loss_values, axis=0) if loss_values else np.empty((0,), dtype=np.float32)
+        for key in self.metric_list:
+            if key in eval_res:
+                results[key] = np.array(eval_res[key]).reshape(1)
+        results['metrics'] = np.array([eval_res[k] for k in self.metric_list if k in eval_res], dtype=np.float32)
+        return results
+
+    def _evaluate_collected_results(self, results, dataset):
+        preds_eval = results['preds']
+        trues_eval = results['trues']
+        metric_tasks = len(self.metric_list)
+        if dataset.mean is not None and dataset.std is not None:
+            metric_tasks += 1
+        metric_bar = ProgressBar(metric_tasks)
+
+        def _metric_progress():
+            metric_bar.update()
+
+        eval_res, eval_log = metric(
+            preds_eval, trues_eval, dataset.mean, dataset.std,
+            metrics=self.metric_list, spatial_norm=self.spatial_norm,
+            progress_hook=_metric_progress,
+        )
+        metric_bar.file.write('\n')
+        return self._make_metric_results(eval_res, [results['loss']], eval_log)
 
     def vali_one_epoch(self, runner, vali_loader, **kwargs):
-        """Evaluate the model with val_loader.
-
-        Args:
-            runner: the trainer of methods.
-            val_loader: dataloader of validation.
-
-        Returns:
-            list(tensor, ...): The list of predictions and losses.
-            eval_log(str): The string of metrics.
-        """
+        """Evaluate the model with val_loader."""
         self.model.eval()
         dataset = vali_loader.dataset
+        if getattr(dataset, 'use_space', False):
+            results = self._stream_spatial_metric_collect(vali_loader)
+            return results, results['eval_log']
         results = self._nondist_forward_collect(vali_loader, len(dataset))
-
-        eval_log = ""
-
-        preds_eval = results['preds']
-        trues_eval = results['trues']
-        metric_tasks = len(self.metric_list)
-        if dataset.mean is not None and dataset.std is not None:
-            metric_tasks += 1
-        metric_bar = ProgressBar(metric_tasks)
-
-        def _metric_progress():
-            metric_bar.update()
-
-        eval_res, eval_log = metric(preds_eval, trues_eval,
-                                    dataset.mean, dataset.std,
-                                    metrics=self.metric_list, spatial_norm=self.spatial_norm,
-                                    progress_hook=_metric_progress)
-        metric_bar.file.write('\n')
-        for k in self.metric_list:
-            results[k] = np.array(eval_res[k]).reshape(1)
-        results['metrics'] = np.array([eval_res[k] for k in self.metric_list], dtype=np.float32)
-        results['metric_dict'] = eval_res
-
-        return results, eval_log
+        results = self._evaluate_collected_results(results, dataset)
+        return results, results['eval_log']
 
     def test_one_epoch(self, runner, test_loader, **kwargs):
-        """Evaluate the model with test_loader.
-
-        Args:
-            runner: the trainer of methods.
-            test_loader: dataloader of testing.
-
-        Returns:
-            list(tensor, ...): The list of inputs and predictions.
-        """
+        """Evaluate the model with test_loader."""
         self.model.eval()
         dataset = test_loader.dataset
+        if getattr(dataset, 'use_space', False):
+            return self._stream_spatial_metric_collect(test_loader)
         results = self._nondist_forward_collect(test_loader, len(dataset))
-            
-        eval_log = ""
-        preds_eval = results['preds']
-        trues_eval = results['trues']
-        metric_tasks = len(self.metric_list)
-        if dataset.mean is not None and dataset.std is not None:
-            metric_tasks += 1
-        metric_bar = ProgressBar(metric_tasks)
-
-        def _metric_progress():
-            metric_bar.update()
-
-        eval_res, eval_log = metric(preds_eval, trues_eval,
-                                    dataset.mean, dataset.std,
-                                    metrics=self.metric_list, spatial_norm=self.spatial_norm,
-                                    progress_hook=_metric_progress)
-        metric_bar.file.write('\n')
-        for k in self.metric_list:
-            results[k] = np.array(eval_res[k]).reshape(1)
-        results['metrics'] = np.array([eval_res[k] for k in self.metric_list], dtype=np.float32)
-        results['metric_dict'] = eval_res
-
-        results['eval_log'] = eval_log
-        
-        return results
+        return self._evaluate_collected_results(results, dataset)
 
     def current_lr(self) -> Union[List[float], Dict[str, List[float]]]:
         """Get current learning rates.

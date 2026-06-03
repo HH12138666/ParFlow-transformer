@@ -24,17 +24,17 @@ from parflow.tools.io import read_pfb, write_pfb
 # ---- User configuration ----
 # Training output dir (contains timestamp subdirs with checkpoint.pth)
 WORK_DIR = "/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press"
-CHECKPOINT_NAME = "2026-05-05-13-00_FACTS"
+CHECKPOINT_NAME = "2026-05-31-18-28_FACTS"
 CHECKPOINT_PATH = os.path.join(WORK_DIR, CHECKPOINT_NAME, "checkpoint.pth")
 
 DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
+OVERRIDE_DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
 OUTPUT_DIR = "/home/huanghui/data/ParFlow-transformer/inference_data/press"
-RUN_PARAM = "new_lastest_press_evap_static_train1_19_20_post_cross_cnn5_k3"  
+RUN_PARAM = "test1_press_evap_static_train1_19_post_cross_cnn5_k3"  
 #press_evap_static_train1_19_20_post_cross_cnn5_k3_h60_w84_sh_30_sw42_in12_out12_rollout720
 # Must match current training data pipeline
 # VAR_NAME = "press"
 # USE_EVAP = False
-# USE_APCP = False
 # USE_STATIC = False
 #perm_x,alpha_z6-9,n_z6-9,porosity_z6-9
 STATIC_DATA = ""
@@ -43,8 +43,8 @@ STATS_PATH = ""
 EPS = 1e-8
 
 # Prediction range (parsed from filename tail digits, e.g., 20190001)
-START_HOUR = 20214388
-END_HOUR = 20218760
+START_HOUR = 20204388
+END_HOUR = 20208783
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -85,11 +85,10 @@ def _list_pfb_files(root, recursive=True):
     return files
 
 
-def _resolve_parflow_roots(data_root, var_name="wtd", use_evap=False, use_apcp=False, use_static=False):
+def _resolve_parflow_roots(data_root, var_name="wtd", use_evap=False, use_static=False):
     base = Path(data_root)
     var_root = str(base / var_name)
     evap_root = None
-    apcp_root = None
     if use_evap:
         evap_root_path = base / "evaptrans"
         if not evap_root_path.exists():
@@ -97,15 +96,8 @@ def _resolve_parflow_roots(data_root, var_name="wtd", use_evap=False, use_apcp=F
             if alt.exists():
                 evap_root_path = alt
         evap_root = str(evap_root_path)
-    if use_apcp:
-        apcp_root_path = base / "APCP"
-        if not apcp_root_path.exists():
-            alt = base / "apcp"
-            if alt.exists():
-                apcp_root_path = alt
-        apcp_root = str(apcp_root_path)
     static_root = str(base / "static") if use_static else None
-    return var_root, evap_root, apcp_root, static_root
+    return var_root, evap_root, static_root
 
 
 def _parse_static_data(static_data):
@@ -174,23 +166,12 @@ def _read_evap_frame(evap_path):
     return arr
 
 
-def _read_apcp_frame(apcp_path):
-    arr = read_pfb(get_absolute_path(str(apcp_path))).astype(np.float32)
-    if arr.ndim == 2:
-        arr = arr[None, ...]
-    elif arr.ndim != 3:
-        raise ValueError(f"Expected 2D/3D APCP array, got shape {arr.shape} for {apcp_path}")
-    return arr
 
-
-def _read_combined_frame(var_path, evap_path=None, apcp_path=None, static_arr=None):
+def _read_combined_frame(var_path, evap_path=None, static_arr=None):
     arr = _read_var_frame(var_path)
     if evap_path is not None:
         evap = _read_evap_frame(evap_path)
         arr = np.concatenate([arr, evap], axis=0)
-    if apcp_path is not None:
-        apcp = _read_apcp_frame(apcp_path)
-        arr = np.concatenate([arr, apcp], axis=0)
     if static_arr is not None:
         if static_arr.shape[1:] != arr.shape[1:]:
             raise ValueError(
@@ -206,9 +187,7 @@ def _build_rollout_input_frame(
     c_in,
     out_channels,
     use_evap=False,
-    use_apcp=False,
     evap_files=None,
-    apcp_files=None,
     static_arr=None,
     aux_by_index=None,
 ):
@@ -216,18 +195,13 @@ def _build_rollout_input_frame(
     aux = None
     if aux_by_index is not None:
         aux = aux_by_index.get(hour_idx)
-    elif use_evap or use_apcp or static_arr is not None:
+    elif use_evap or static_arr is not None:
         aux_parts = []
         if use_evap:
             if evap_files is None:
                 raise ValueError("use_evap=True requires evap_files in rollout.")
             evap = _read_evap_frame(evap_files[hour_idx])
             aux_parts.append(evap.astype(np.float32, copy=False))
-        if use_apcp:
-            if apcp_files is None:
-                raise ValueError("use_apcp=True requires apcp_files in rollout.")
-            apcp = _read_apcp_frame(apcp_files[hour_idx])
-            aux_parts.append(apcp.astype(np.float32, copy=False))
         if static_arr is not None:
             aux_parts.append(static_arr.astype(np.float32, copy=False))
         if len(aux_parts) == 1:
@@ -251,12 +225,10 @@ def _build_rollout_aux_map(
     start_idx,
     end_idx,
     use_evap=False,
-    use_apcp=False,
     evap_files=None,
-    apcp_files=None,
     static_arr=None,
 ):
-    if not use_evap and not use_apcp and static_arr is None:
+    if not use_evap and static_arr is None:
         return None
     aux_map = {}
     static_fp32 = static_arr.astype(np.float32, copy=False) if static_arr is not None else None
@@ -267,11 +239,6 @@ def _build_rollout_aux_map(
                 raise ValueError("use_evap=True requires evap_files for aux preload.")
             evap = _read_evap_frame(evap_files[idx])
             aux_parts.append(evap.astype(np.float32, copy=False))
-        if use_apcp:
-            if apcp_files is None:
-                raise ValueError("use_apcp=True requires apcp_files for aux preload.")
-            apcp = _read_apcp_frame(apcp_files[idx])
-            aux_parts.append(apcp.astype(np.float32, copy=False))
         if static_fp32 is not None:
             aux_parts.append(static_fp32)
         if len(aux_parts) == 1:
@@ -376,42 +343,53 @@ def _build_file_items(files):
     return items
 
 
-def _build_aligned_var_evap_apcp_items(var_root, evap_root=None, apcp_root=None):
+def _hour_group(hour_id):
+    token = str(int(hour_id))
+    return int(token[:4]) if len(token) >= 8 else None
+
+
+def _terminal_ids_by_group(hour_ids):
+    groups = {}
+    for hour_id in hour_ids:
+        groups.setdefault(_hour_group(hour_id), []).append(hour_id)
+    return {max(ids) for ids in groups.values()}
+
+
+def _shift_evap_items_to_var_hours(var_ids, evap_items):
+    shifted = {hour_id - 1: path for hour_id, path in evap_items}
+    missing = [hour_id for hour_id in var_ids if hour_id not in shifted]
+    allowed_missing = _terminal_ids_by_group(var_ids)
+    unexpected = [hour_id for hour_id in missing if hour_id not in allowed_missing]
+    if unexpected:
+        preview = ", ".join(str(x) for x in unexpected[:5])
+        raise ValueError(f"Missing shifted evap files for {len(unexpected)} hour ids, e.g. {preview}")
+    kept_ids = [hour_id for hour_id in var_ids if hour_id in shifted]
+    if missing:
+        preview = ", ".join(str(x) for x in missing[:5])
+        print(
+            "[evap alignment] var(h) uses evaptrans(h+1); "
+            f"dropped terminal var ids: {preview} (count={len(missing)})"
+        )
+    else:
+        print("[evap alignment] var(h) uses evaptrans(h+1); no var ids dropped")
+    return kept_ids, shifted
+
+
+def _build_aligned_var_evap_items(var_root, evap_root=None):
     var_items = _build_file_items(_list_pfb_files(var_root, recursive=True))
-    var_ids = [h for h, _ in var_items]
-    var_id_set = set(var_ids)
+    var_ids = [hour_id for hour_id, _ in var_items]
 
     evap_map = None
     if evap_root is not None:
         evap_items = _build_file_items(_list_pfb_files(evap_root, recursive=True))
-        evap_map = {h: p for h, p in evap_items}
-        missing = [h for h in var_ids if h not in evap_map]
-        if missing:
-            preview = ", ".join(str(x) for x in missing[:5])
-            raise ValueError(f"Missing evap files for {len(missing)} hour ids, e.g. {preview}")
-        extra = [h for h in evap_map.keys() if h not in var_id_set]
-        if extra:
-            preview = ", ".join(str(x) for x in extra[:5])
-            raise ValueError(f"Extra evap files not in var ids ({len(extra)}), e.g. {preview}")
-
-    apcp_map = None
-    if apcp_root is not None:
-        apcp_items = _build_file_items(_list_pfb_files(apcp_root, recursive=True))
-        apcp_map = {h: p for h, p in apcp_items}
-        missing = [h for h in var_ids if h not in apcp_map]
-        if missing:
-            preview = ", ".join(str(x) for x in missing[:5])
-            raise ValueError(f"Missing APCP files for {len(missing)} hour ids, e.g. {preview}")
-        extra = [h for h in apcp_map.keys() if h not in var_id_set]
-        if extra:
-            preview = ", ".join(str(x) for x in extra[:5])
-            raise ValueError(f"Extra APCP files not in var ids ({len(extra)}), e.g. {preview}")
+        var_ids, evap_map = _shift_evap_items_to_var_hours(var_ids, evap_items)
+        var_item_map = {hour_id: path for hour_id, path in var_items}
+        var_items = [(hour_id, var_item_map[hour_id]) for hour_id in var_ids]
 
     aligned = []
-    for h, vp in var_items:
-        ep = evap_map[h] if evap_map is not None else None
-        ap = apcp_map[h] if apcp_map is not None else None
-        aligned.append((h, vp, ep, ap))
+    for hour_id, var_path in var_items:
+        evap_path = evap_map[hour_id] if evap_map is not None else None
+        aligned.append((hour_id, var_path, evap_path))
     return aligned
 
 
@@ -428,6 +406,14 @@ def _to_bool(value):
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y", "on"}
     return bool(value)
+
+
+def _apply_data_root_override(data_root):
+    override = str(OVERRIDE_DATA_ROOT).strip()
+    if override:
+        print(f"[config] override data_root: {data_root} -> {override}")
+        return override
+    return data_root
 
 
 def _load_model_params(checkpoint_path):
@@ -499,45 +485,38 @@ def main():
 
         var_name = _require_param(run_params, "var_name")
         use_evap = _to_bool(_require_param(run_params, "use_evap"))
-        use_apcp = _to_bool(_require_param(run_params, "use_apcp"))
         use_static = _to_bool(_require_param(run_params, "use_static_input"))
         static_data = run_params.get("static_data", None)
         stats_path = _require_param(run_params, "stats_path")
         data_root = _require_param(run_params, "data_root")
+        data_root = _apply_data_root_override(data_root)
     else:
         cfg = dict(_model_cfg)
         var_name = VAR_NAME
         use_evap = USE_EVAP
-        use_apcp = USE_APCP
         use_static = USE_STATIC
         static_data = STATIC_DATA
         stats_path = STATS_PATH
         data_root = DATA_ROOT
 
     print(
-        f"[config] var_name={var_name}, use_evap={use_evap}, use_apcp={use_apcp}, "
+        f"[config] var_name={var_name}, use_evap={use_evap}, "
         f"use_static={use_static}, static_data={static_data}, stats_path={stats_path}, "
         f"data_root={data_root}"
     )
 
-    var_root, evap_root, apcp_root, static_root = _resolve_parflow_roots(
+    var_root, evap_root, static_root = _resolve_parflow_roots(
         data_root,
         var_name=var_name,
         use_evap=use_evap,
-        use_apcp=use_apcp,
         use_static=use_static,
     )
 
-    aligned_items = _build_aligned_var_evap_apcp_items(
-        var_root,
-        evap_root if use_evap else None,
-        apcp_root if use_apcp else None,
-    )
-    files = [vp for _, vp, _, _ in aligned_items]
-    evap_files = [ep for _, _, ep, _ in aligned_items]
-    apcp_files = [ap for _, _, _, ap in aligned_items]
-    items = [(h, vp) for h, vp, _, _ in aligned_items]
-    hours = [h for h, _, _, _ in aligned_items]
+    aligned_items = _build_aligned_var_evap_items(var_root, evap_root if use_evap else None)
+    files = [vp for _, vp, _ in aligned_items]
+    evap_files = [ep for _, _, ep in aligned_items]
+    items = [(h, vp) for h, vp, _ in aligned_items]
+    hours = [h for h, _, _ in aligned_items]
     rel_paths = [Path(vp).relative_to(var_root) for vp in files]
 
     raw_end = _parse_index(END_HOUR, None)
@@ -558,12 +537,7 @@ def main():
         else None
     )
 
-    sample = _read_combined_frame(
-        files[start_idx],
-        evap_path=evap_files[start_idx],
-        apcp_path=apcp_files[start_idx],
-        static_arr=static_arr,
-    )
+    sample = _read_combined_frame(files[start_idx], evap_path=evap_files[start_idx], static_arr=static_arr)
     c_in, h, w = sample.shape
 
     pre_seq = int(_require_model_cfg_key(cfg, "pre_seq"))
@@ -578,7 +552,7 @@ def main():
         if int(expected_in) != c_in:
             raise ValueError(
                 f"Input channels mismatch: model_config.input_channels={expected_in}, "
-                f"but data provides C={c_in}. Check data_root/var_name/use_evap/use_apcp/use_static_input."
+                f"but data provides C={c_in}. Check data_root/var_name/use_evap/use_static_input."
             )
         if int(expected_h) != h or int(expected_w) != w:
             raise ValueError(
@@ -655,24 +629,17 @@ def main():
         history = []
         for i in range(pre_seq):
             history.append(
-                _read_combined_frame(
-                    files[t0 + i],
-                    evap_path=evap_files[t0 + i],
-                    apcp_path=apcp_files[t0 + i],
-                    static_arr=static_arr,
-                )
+                _read_combined_frame(files[t0 + i], evap_path=evap_files[t0 + i], static_arr=static_arr)
             )
 
         if USE_ROLLOUT:
             rollout_aux_map = None
-            if PRELOAD_ROLLOUT_AUX and (use_evap or use_apcp or static_arr is not None):
+            if PRELOAD_ROLLOUT_AUX and (use_evap or static_arr is not None):
                 rollout_aux_map = _build_rollout_aux_map(
                     t0 + pre_seq,
                     t0 + pre_seq + total_aft,
                     use_evap=use_evap,
-                    use_apcp=use_apcp,
                     evap_files=evap_files,
-                    apcp_files=apcp_files,
                     static_arr=static_arr,
                 )
             predicted = 0
@@ -727,9 +694,7 @@ def main():
                         c_in=c_in,
                         out_channels=out_channels,
                         use_evap=use_evap,
-                        use_apcp=use_apcp,
                         evap_files=evap_files,
-                        apcp_files=apcp_files,
                         static_arr=static_arr,
                         aux_by_index=rollout_aux_map,
                     )

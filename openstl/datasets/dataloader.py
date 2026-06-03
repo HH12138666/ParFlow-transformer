@@ -24,7 +24,11 @@ def _build_parflow_loader_cfg(kwargs, model_cfg):
         'space_w': None,
         'space_stride_h': None,
         'space_stride_w': None,
-        'static_data': None,
+        'use_extra_data': False,
+        'extra_manifest_path': None,
+        'extra_data_root': None,
+        'use_val': False,
+        'use_time_grouped_sampler': True,
     }
     cfg = _collect_kwargs(kwargs, direct_defaults)
     cfg['out_channels'] = _get_cfg_value(kwargs, model_cfg, 'out_channels', None)
@@ -32,12 +36,16 @@ def _build_parflow_loader_cfg(kwargs, model_cfg):
     cfg['split_mode'] = _get_cfg_value(kwargs, model_cfg, 'split_mode', 'ratio')
     cfg['train_years'] = _get_cfg_value(kwargs, model_cfg, 'train_years', None)
     cfg['holdout_years'] = _get_cfg_value(kwargs, model_cfg, 'holdout_years', None)
-    cfg['val_ratio_in_holdout'] = _get_cfg_value(kwargs, model_cfg, 'val_ratio_in_holdout', 0.25)
+    cfg['val_ratio_in_holdout'] = _get_cfg_value(kwargs, model_cfg, 'val_ratio_in_holdout', 0.5)
     cfg['var_name'] = _get_cfg_value(kwargs, model_cfg, 'var_name', 'press')
     cfg['use_evap'] = _get_cfg_value(kwargs, model_cfg, 'use_evap', True)
-    cfg['use_apcp'] = _get_cfg_value(kwargs, model_cfg, 'use_apcp', False)
     cfg['use_static_input'] = _get_cfg_value(kwargs, model_cfg, 'use_static_input', True)
     cfg['stats_path'] = _get_cfg_value(kwargs, model_cfg, 'stats_path', None)
+    cfg['use_extra_data'] = _get_cfg_value(kwargs, model_cfg, 'use_extra_data', False)
+    cfg['extra_manifest_path'] = _get_cfg_value(kwargs, model_cfg, 'extra_manifest_path', None)
+    cfg['extra_data_root'] = _get_cfg_value(kwargs, model_cfg, 'extra_data_root', None)
+    cfg['use_val'] = _get_cfg_value(kwargs, model_cfg, 'use_val', False)
+    cfg['use_time_grouped_sampler'] = _get_cfg_value(kwargs, model_cfg, 'use_time_grouped_sampler', True)
     return cfg
 
 

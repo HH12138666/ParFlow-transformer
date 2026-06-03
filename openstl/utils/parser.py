@@ -84,18 +84,26 @@ def create_parser():
                         help='Training years, e.g. [2019]')
     parser.add_argument('--holdout_years', type=parse_list, default=None,
                         help='Holdout years split into val/test, e.g. [2020]')
-    parser.add_argument('--val_ratio_in_holdout', default=0.25, type=float,
+    parser.add_argument('--val_ratio_in_holdout', default=0.5, type=float,
                         help='Validation fraction inside each holdout year')
     parser.add_argument('--var_name', default='press', type=str,
                         help='Primary dynamic variable folder name under data_root (e.g., press or wtd)')
     parser.add_argument('--use_evap', default=True, type=parse_bool,
                         help='Whether to read and concatenate evaptrans channels')
-    parser.add_argument('--use_apcp', default=False, type=parse_bool,
-                        help='Whether to read and concatenate APCP channels')
     parser.add_argument('--use_static_input', default=True, type=parse_bool,
                         help='Whether to read and concatenate static channels')
+    parser.add_argument('--use_time_grouped_sampler', default=True, type=parse_bool,
+                        help='Group ParFlow spatial windows by time index during training')
     parser.add_argument('--stats_path', default=None, type=str,
                         help='Path to stats npz file used for normalization')
+    parser.add_argument('--use_extra_data', default=False, type=parse_bool,
+                        help='Whether to append manifest-selected extra training samples')
+    parser.add_argument('--extra_manifest_path', default=None, type=str,
+                        help='CSV manifest for extra training samples; requires t0 and optional data_root')
+    parser.add_argument('--extra_data_root', default=None, type=str,
+                        help='Default data_root for extra manifest rows without data_root')
+    parser.add_argument('--use_val', default=False, type=parse_bool,
+                        help='Whether to build and run validation during training')
 
     # method parameters
     parser.add_argument('--method', '-m', default='predformer', type=str,
@@ -110,14 +118,14 @@ def create_parser():
     parser.add_argument('--drop', type=float, default=0.0, help='Dropout rate(default: 0.)')
     
     # parser.add_argument('--drop_path', type=float, default=0.0, help='Drop path rate for SimVP (default: 0.)')
-    parser.add_argument('--overwrite', action='store_true', default=False,
+    parser.add_argument('--overwrite', action='store_true', default=True,
                         help='Whether to allow overwriting the provided config file with args')
     
     # Training parameters (optimizer)
-    parser.add_argument('--epoch', '-e', default=None, type=int, help='end epochs (default: 200)')
+    parser.add_argument('--epoch', '-e', default=50, type=int, help='end epochs (default: 50)')
     parser.add_argument('--log_step', default=1, type=int, help='Log interval by step')
-    parser.add_argument('--opt', default='adam', type=str, metavar='OPTIMIZER',
-                        help='Optimizer (default: "adam"')
+    parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
+                        help='Optimizer (default: "adamw"')
     parser.add_argument('--opt_eps', default=None, type=float, metavar='EPSILON',
                         help='Optimizer epsilon (default: None, use opt default)')
     parser.add_argument('--opt_betas', default=None, type=float, nargs='+', metavar='BETA',
@@ -129,14 +137,18 @@ def create_parser():
                         help='Clip gradient norm (default: None, no clipping)')
     parser.add_argument('--clip_mode', type=str, default='norm',
                         help='Gradient clipping mode. One of ("norm", "value", "agc")')
-    parser.add_argument('--early_stop_epoch', default=-1, type=int,
+    parser.add_argument('--early_stop_epoch', default=30, type=int,
                         help='Check to early stop after this epoch')
+    parser.add_argument('--save_interval', default=5, type=int,
+                        help='Epoch interval for periodic checkpoint saving')
+    parser.add_argument('--test_interval', default=5, type=int,
+                        help='Epoch interval for test-set diagnostic evaluation; 0 disables it')
     parser.add_argument('--no_display_method_info', action='store_true', default=False,
                         help='Do not display method info')
 
     # Training parameters (scheduler)
-    parser.add_argument('--sched', default='onecycle', type=str, metavar='SCHEDULER',
-                        help='LR scheduler (default: "onecycle"')
+    parser.add_argument('--sched', default='cosine', type=str, metavar='SCHEDULER',
+                        help='LR scheduler (default: "cosine"')
     parser.add_argument('--lr', default=None, type=float, help='Learning rate (default: 1e-3)')
     parser.add_argument('--lr_k_decay', type=float, default=1.0,
                         help='learning rate k-decay for cosine/poly (default: 1.0)')
@@ -216,12 +228,16 @@ def default_parser():
         'split_mode': 'ratio',
         'train_years': None,
         'holdout_years': None,
-        'val_ratio_in_holdout': 0.25,
+        'val_ratio_in_holdout': 0.5,
         'var_name': 'press',
         'use_evap': True,
-        'use_apcp': False,
         'use_static_input': True,
+        'use_time_grouped_sampler': True,
         'stats_path': None,
+        'use_extra_data': False,
+        'extra_manifest_path': None,
+        'extra_data_root': None,
+        'use_val': False,
              
         # method parameters
         'method': 'predformer',
@@ -229,22 +245,24 @@ def default_parser():
         #'model_type': 'gSTA',
         'drop': 0,
         'drop_path': 0,
-        'overwrite': False,
+        'overwrite': True,
         
         # Training parameters (optimizer)
-        'epoch': 200,
+        'epoch': 50,
         'log_step': 1,
-        'opt': 'adam',
+        'opt': 'adamw',
         'opt_eps': None,
         'opt_betas': None,
         'momentum': 0.9,
         'weight_decay': 0,
         'clip_grad': None,
         'clip_mode': 'norm',
-        'early_stop_epoch': -1,
+        'early_stop_epoch': 30,
+        'save_interval': 5,
+        'test_interval': 5,
         'no_display_method_info': False,
         # Training parameters (scheduler)
-        'sched': 'onecycle',
+        'sched': 'cosine',
         'lr': 1e-3,
         'lr_k_decay': 1.0,
         'warmup_lr': 1e-5,

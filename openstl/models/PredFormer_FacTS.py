@@ -211,6 +211,7 @@ class PredFormer_Model(nn.Module):
                 
 
     def forward(self, x):
+        x_input = x
         B, T, C, H, W = x.shape
         if C != self.input_channels:
             raise ValueError(f"Expected input channels={self.input_channels}, got {C}")
@@ -295,5 +296,12 @@ class PredFormer_Model(nn.Module):
         x = x.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, T, self.out_channels, H_pad, W_pad)
         if valid_input and (self.pad_h or self.pad_w):
             x = x[:, :, :, :input_h, :input_w]
+        if x_input.shape[2] < self.out_channels:
+            raise ValueError(
+                f"Residual prediction requires at least {self.out_channels} "
+                f"pressure channels, got input channels={x_input.shape[2]}."
+            )
+        base_press = x_input[:, -1, :self.out_channels]
+        x = base_press.unsqueeze(1) + x
         return x
     

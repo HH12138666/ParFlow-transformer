@@ -8,6 +8,27 @@ from openstl.utils import (create_parser, default_parser, load_config,
                            init_dist, get_dist_info, destroy_dist)
 
 
+MODEL_CONFIG_DEFAULT_KEYS = (
+    'space_h',
+    'space_w',
+    'space_stride_h',
+    'space_stride_w',
+    'patch_size',
+)
+
+
+def apply_model_config_defaults(config):
+    model_config = config.get('model_config')
+    if model_config is None:
+        return config
+    if not isinstance(model_config, dict):
+        raise TypeError('model_config must be a dict when provided')
+    for key in MODEL_CONFIG_DEFAULT_KEYS:
+        if config.get(key) is None and key in model_config:
+            config[key] = model_config[key]
+    return config
+
+
 if __name__ == '__main__':
     # 创建参数解析器并解析命令行参数
     args = create_parser().parse_args()
@@ -29,6 +50,8 @@ if __name__ == '__main__':
             if config[attribute] is None:
                 config[attribute] = default_values[attribute]
 
+    config = apply_model_config_defaults(config)
+
     # set multi-process settings
     setup_multi_processes(config)
 
@@ -46,7 +69,7 @@ if __name__ == '__main__':
 
     if (not args.distributed) or args.rank == 0:
         print('>'*35 + ' testing  ' + '<'*35)
-        mse = exp.test()
+        exp.test()
 
     if args.distributed:
         destroy_dist()

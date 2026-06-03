@@ -119,9 +119,13 @@ def create_loader(dataset,
                   drop_last=False,
                   fp16=False,
                   collate_fn=None,
+                  sampler=None,
                   persistent_workers=True,
                   worker_seeding='all'):
-    sampler = None
+    custom_sampler = sampler
+    if distributed and custom_sampler is not None:
+        raise ValueError('create_loader cannot combine custom sampler with distributed sampler.')
+    sampler = custom_sampler
     if distributed and not isinstance(dataset, torch.utils.data.IterableDataset):
         if is_training:
             if num_aug_repeats:
@@ -148,7 +152,7 @@ def create_loader(dataset,
         pin_memory=pin_memory,
         drop_last=drop_last,
         worker_init_fn=partial(worker_init, worker_seeding=worker_seeding),
-        persistent_workers=persistent_workers
+        persistent_workers=persistent_workers and num_workers > 0
     )
     try:
         loader = loader_class(dataset, **loader_args)
