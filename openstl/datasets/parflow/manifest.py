@@ -68,7 +68,8 @@ def build_extra_train_datasets(base_kwargs, manifest_path, default_root, use_sta
 
 
 def _build_one_extra_dataset(base_kwargs, data_root, hour_ids, use_static, var_name, use_evap):
-    press_root, evap_root, static_root = resolve_parflow_roots(data_root, use_static, var_name, use_evap)
+    # 额外数据只替换动态变量 press/evaptrans；静态变量沿用普通训练集。
+    press_root, evap_root, _ = resolve_parflow_roots(data_root, False, var_name, use_evap)
     years = sorted({int(str(hour_id)[:4]) for hour_id in hour_ids})
     press_files, evap_files = prepare_press_evap_files(press_root, evap_root, allowed_years=years)
     kwargs = dict(base_kwargs)
@@ -76,7 +77,7 @@ def _build_one_extra_dataset(base_kwargs, data_root, hour_ids, use_static, var_n
     aft = kwargs.pop("aft")
     kwargs.update({
         "evap_root": evap_root,
-        "static_root": static_root,
+        "static_root": base_kwargs.get("static_root") if use_static else None,
         "press_files": press_files,
         "evap_files": evap_files,
         "explicit_time_indices": indices_from_manifest_hours(press_files, hour_ids, pre + aft),

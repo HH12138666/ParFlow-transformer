@@ -17,3 +17,11 @@ inference_data_bar/
 new_result_analyze/
 new_stats/
 
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+
+# Editor swap/backup files
+*.swp
+*.swo
+*~
