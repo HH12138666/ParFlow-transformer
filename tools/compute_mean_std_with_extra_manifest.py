@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# sbatch /home/huanghui/data/slurm_job/compute_apcp14_extra_stats.sh
 """根据指定小时计算普通训练集 + 额外数据的 mean/std。
 
 思路和旧版 compute_mean_std.py 保持一致：
@@ -8,36 +7,35 @@
 3. 静态变量不随额外数据变化，只从普通数据目录读取一次。
 4. 最后把动态变量 stats 和静态变量 stats 按通道拼起来保存。
 """
+import argparse
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+from openstl.datasets.parflow.readers import read_evap_frame, read_press_frame, read_static_stack
 
 from parflow_extra_data_common import (
     ChannelAccumulator,
     hour_to_index,
     prepare_frame_files,
-    read_evap_frame,
     read_manifest_rows,
-    read_press_frame,
-    read_static_stack,
 )
 
 # ===================== 用户配置区 =====================
 # NORMAL_DATA_ROOT: 普通 ParFlow 数据根目录。
-NORMAL_DATA_ROOT = "/home/huanghui/data/ParFlow-transformer/data/parflow"
+NORMAL_DATA_ROOT = ""
 
 # NORMAL_YEARS: 普通训练数据年份，可以写成 "2020,2021"。
 NORMAL_YEARS = "2020,2021"
 
 # EXTRA_DATA_ROOT: 额外数据 CSV 不写 data_root 时使用的默认额外数据根目录。
-EXTRA_DATA_ROOT = "/home/huanghui/data/ParFlow_train_data/apcp1.4"
+EXTRA_DATA_ROOT = ""
 
 # MANIFEST_DIR: 额外数据 CSV 所在目录。
-MANIFEST_DIR = "/home/huanghui/data/ParFlow-transformer/extra_data/extra_apcp14_training_design"
+MANIFEST_DIR = ""
 
 # STATS_OUT_DIR: stats npz 输出目录，和旧 compute_mean_std.py 保持一致。
-STATS_OUT_DIR = "/home/huanghui/data/ParFlow-transformer/stats"
+STATS_OUT_DIR = ""
 
 # VAR_NAME: 主变量名。当前是 pressure。
 VAR_NAME = "press"
@@ -48,10 +46,10 @@ USE_EVAP = True
 WINDOW_HOURS = 24
 
 # EXTRA_MANIFEST: 这次要加入的额外数据 CSV 文件名。空字符串表示只统计普通训练集。
-EXTRA_MANIFEST = "extra_apcp14_regime_moderate_heavy_2020_2021.csv"
+EXTRA_MANIFEST = ""
 
 # OUT_NPZ: 本次输出的 stats 文件名。
-OUT_NPZ = "stats1_1.4_press_evap_static_2020_2021_moderate_heavy.npz"
+OUT_NPZ = ""
 # =====================================================
 
 
@@ -149,8 +147,27 @@ def save_stats(dynamic_acc: ChannelAccumulator) -> None:
     print(f"saved stats: {out} channels={mean.shape[0]} dynamic_pixels={dynamic_acc.count}")
 
 
+def parse_cli():
+    parser = argparse.ArgumentParser(description="Compute normalization stats for normal and extra data")
+    parser.add_argument("--normal-data-root", required=True)
+    parser.add_argument("--normal-years", default="2020,2021")
+    parser.add_argument("--extra-data-root")
+    parser.add_argument("--extra-manifest")
+    parser.add_argument("--output", required=True)
+    return parser.parse_args()
+
+
 def main() -> None:
     """脚本入口：普通动态 + 指定额外动态 + 静态，最后保存一份 stats。"""
+    global NORMAL_DATA_ROOT, NORMAL_YEARS, EXTRA_DATA_ROOT, MANIFEST_DIR, EXTRA_MANIFEST, STATS_OUT_DIR, OUT_NPZ
+    args = parse_cli()
+    NORMAL_DATA_ROOT, NORMAL_YEARS = args.normal_data_root, args.normal_years
+    EXTRA_DATA_ROOT = args.extra_data_root or ""
+    manifest = Path(args.extra_manifest) if args.extra_manifest else None
+    MANIFEST_DIR = str(manifest.parent) if manifest else ""
+    EXTRA_MANIFEST = manifest.name if manifest else ""
+    output = Path(args.output)
+    STATS_OUT_DIR, OUT_NPZ = str(output.parent), output.name
     print(f"[stats] normal_years={NORMAL_YEARS} extra_manifest={EXTRA_MANIFEST or 'None'}")
     dynamic_acc = ChannelAccumulator()
     add_normal_dynamic(dynamic_acc)

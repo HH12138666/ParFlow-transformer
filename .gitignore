@@ -1,22 +1,12 @@
-pred_result/
 data/
 work_dirs/
-output.log
-nohup.out
-train_log_*
-check_data_figure/
 result_analyze/
-slurm-*
-debug_outliers/
 inference_data/
-inference_plot/
+slurm/logs/*.out
+slurm/logs/*.err
 stats/
-stats_daily/
-prev_result_analyze/
-inference_data_bar/
-new_result_analyze/
-new_stats/
-
+slurm/
+README.md
 # Python bytecode/cache
 __pycache__/
 *.py[cod]

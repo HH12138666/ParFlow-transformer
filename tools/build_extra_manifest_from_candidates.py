@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# sbatch /home/huanghui/data/slurm_job/build_apcp14_extra_manifests.sh
 
 """根据降雨 pfb 直接生成额外训练数据 CSV。
 
@@ -8,6 +7,7 @@
 2. 按模型样本方式生成 24h、stride=6h 的候选窗口。
 3. 按配置区定义的策略，输出后续训练可读取的 extra manifest CSV。
 """
+import argparse
 import csv
 from pathlib import Path
 
@@ -23,23 +23,20 @@ from parflow_extra_data_common import (
 # ===================== 用户配置区 =====================
 # APCP_DIRS: 额外数据对应的降雨 forcing 目录，可以一次写多个年份。
 # 工具会先分别在每个目录内生成 24h/stride=6h 候选窗口，再合并后统一筛选。
-APCP_DIRS = [
-    "/home/huanghui/data/ParFlow_train_data/parflow_forcing/APCP1.4/2020",
-    "/home/huanghui/data/ParFlow_train_data/parflow_forcing/APCP1.4/2021",
-]
+APCP_DIRS = []
 
 # APCP_DIR: 单目录兼容入口；当 APCP_DIRS 为空时才会使用它。
-APCP_DIR = "/home/huanghui/data/ParFlow_train_data/parflow_forcing/APCP1.4/2021"
+APCP_DIR = ""
 
 # EXTRA_DATA_ROOT: 额外 ParFlow 动态数据根目录，只用于检查 t0 是否能组成完整样本。
 # 注意：CSV 只写 split 和 t0，不写 data_root；训练时仍通过 --extra_data_root 指定这个目录。
-EXTRA_DATA_ROOT = "/home/huanghui/data/ParFlow_train_data/apcp1.4"
+EXTRA_DATA_ROOT = ""
 
 # WINDOW_HOURS: 一个训练样本需要的总小时数，输入 12h + 输出 12h = 24h。
 WINDOW_HOURS = 24
 
 # OUT_DIR: 输出 CSV 的目录。
-OUT_DIR = "/home/huanghui/data/ParFlow-transformer/extra_data/extra_apcp14_training_design"
+OUT_DIR = str(Path(__file__).resolve().parents[1] / "extra_data" / "extra_apcp14_training_design")
 
 # SELECT_MODE: 选择你这次要生成哪一种额外训练数据 CSV。
 # 可选值：
@@ -183,8 +180,28 @@ def is_complete_t0(mapping: dict[int, int], t0: int) -> bool:
     return all((t0 + offset) in mapping for offset in range(WINDOW_HOURS))
 
 
+def parse_cli():
+    parser = argparse.ArgumentParser(description="Build an extreme-event training manifest")
+    parser.add_argument("--apcp-dir", action="append", required=True)
+    parser.add_argument("--extra-data-root", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--mode", choices=("all", "top_hours", "regime"), default="regime")
+    parser.add_argument("--regimes", default="moderate,heavy")
+    parser.add_argument("--top-hours", type=int, default=4800)
+    parser.add_argument("--score", default="rain_total")
+    return parser.parse_args()
+
+
 def main() -> None:
     """脚本入口：读降雨、建候选窗口、过滤无效 t0，再按当前选择写一个 CSV。"""
+    global APCP_DIRS, EXTRA_DATA_ROOT, OUT_DIR, OUT_CSV, SELECT_MODE, SELECT_REGIMES, TOP_HOURS, TOP_SCORE
+    args = parse_cli()
+    APCP_DIRS = args.apcp_dir
+    EXTRA_DATA_ROOT = args.extra_data_root
+    output = Path(args.output)
+    OUT_DIR, OUT_CSV = str(output.parent), output.name
+    SELECT_MODE, SELECT_REGIMES = args.mode, args.regimes
+    TOP_HOURS, TOP_SCORE = args.top_hours, args.score
     candidates = build_all_candidates()
     candidates = filter_complete_windows(candidates)
     print(f"candidate_windows={len(candidates['t0'])} apcp_dirs={len(active_apcp_dirs())}")

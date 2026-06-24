@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+import re
 
 import numpy as np
 from parflow.tools.fs import get_absolute_path
@@ -20,59 +21,91 @@ def _cached_read_pfb(path):
 
 def _as_channel_first(arr, path, label, allow_2d=True):
     if arr.ndim == 2 and allow_2d:
-        return arr[None, ...]
+        return arr[None]
     if arr.ndim == 3:
         return arr
     expected = "2D/3D" if allow_2d else "3D"
-    raise ValueError(f"Expected {expected} {label} array, got shape {arr.shape} for {path}")
+    raise ValueError(f"Expected {expected} {label}, got {arr.shape} for {path}")
 
 
 def read_press_frame(press_path):
-    return _as_channel_first(_cached_read_pfb(str(press_path)), press_path, "press", allow_2d=True)
+    return _as_channel_first(
+        _cached_read_pfb(str(press_path)), press_path, "pressure"
+    )
 
 
 def read_evap_frame(evap_path):
     if evap_path is None:
-        raise ValueError("evap_path is required when reading evaptrans data")
-    return _as_channel_first(_cached_read_pfb(str(evap_path)), evap_path, "evaptrans", allow_2d=False)
+        raise ValueError("evap_path is required")
+    return _as_channel_first(
+        _cached_read_pfb(str(evap_path)),
+        evap_path,
+        "evaptrans",
+        allow_2d=False,
+    )
 
 
-def read_static_stack(static_root):
+def read_static_stack(static_root, static_data=None):
     if static_root is None:
         return None
-    merged_static = Path(static_root) / "static.pfb"
-    if not merged_static.exists():
-        raise FileNotFoundError(f"Static file not found: {merged_static}. Please provide static/static.pfb.")
-    return _as_channel_first(_cached_read_pfb(str(merged_static)), merged_static, "static", allow_2d=True)
+    root = Path(static_root)
+    merged = root / "static.pfb"
+    if merged.exists():
+        return _as_channel_first(_cached_read_pfb(str(merged)), merged, "static")
+    files = _select_static_files(root, static_data)
+    arrays = [
+        _as_channel_first(_cached_read_pfb(str(path)), path, "static")
+        for path in files
+    ]
+    return np.concatenate(arrays, axis=0)
+
+
+def _select_static_files(root, static_data):
+    files = sorted(root.glob("*.pfb"))
+    patterns = _static_patterns(static_data)
+    if patterns:
+        files = [
+            path
+            for path in files
+            if any(re.search(pattern, path.name, re.I) for pattern in patterns)
+        ]
+    if not files:
+        raise FileNotFoundError(f"No static PFB files found under {root}")
+    return files
+
+
+def _static_patterns(static_data):
+    if static_data is None:
+        return []
+    if isinstance(static_data, (list, tuple)):
+        return [str(item).strip() for item in static_data if str(item).strip()]
+    return [item.strip() for item in str(static_data).split(",") if item.strip()]
 
 
 def get_static_stack_cached(static_root):
     cache_key = str(static_root)
-    cached = _STATIC_STACK_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    arr = read_static_stack(static_root)
-    _STATIC_STACK_CACHE[cache_key] = arr
-    return arr
+    if cache_key not in _STATIC_STACK_CACHE:
+        _STATIC_STACK_CACHE[cache_key] = read_static_stack(static_root)
+    return _STATIC_STACK_CACHE[cache_key]
 
 
 def get_stats_cached(stats_path):
-    cached = _STATS_CACHE.get(stats_path)
-    if cached is not None:
-        return cached
-    data = np.load(stats_path)
-    mean = np.asarray(data["mean"], dtype=np.float32).reshape(-1)
-    std = np.asarray(data["std"], dtype=np.float32).reshape(-1)
-    _STATS_CACHE[stats_path] = (mean, std)
-    return mean, std
+    if stats_path not in _STATS_CACHE:
+        data = np.load(stats_path)
+        mean = np.asarray(data["mean"], dtype=np.float32).reshape(-1)
+        std = np.asarray(data["std"], dtype=np.float32).reshape(-1)
+        _STATS_CACHE[stats_path] = (mean, std)
+    return _STATS_CACHE[stats_path]
 
 
 def read_combined_frame(press_path, evap_path=None, static_arr=None):
-    combined = read_press_frame(press_path)
+    parts = [read_press_frame(press_path)]
     if evap_path is not None:
-        combined = np.concatenate([combined, read_evap_frame(evap_path)], axis=0)
+        parts.append(read_evap_frame(evap_path))
     if static_arr is not None:
-        if static_arr.shape[1:] != combined.shape[1:]:
-            raise ValueError(f"Static shape {static_arr.shape} does not match frame shape {combined.shape}")
-        combined = np.concatenate([combined, static_arr], axis=0)
-    return combined
+        if static_arr.shape[1:] != parts[0].shape[1:]:
+            raise ValueError(
+                f"Static shape {static_arr.shape} does not match {parts[0].shape}"
+            )
+        parts.append(static_arr)
+    return np.concatenate(parts, axis=0)

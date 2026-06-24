@@ -1,9 +1,10 @@
-from .dataloader_parflow import ParFlowDataset
 from .dataloader import load_data
-from .dataset_constant import dataset_parameters
-from .utils import create_loader
+from .parflow import ParFlowDataset
+from .utils import LoaderConfig, create_loader
 
 __all__ = [
-    'ParFlowDataset',
-    'load_data', 'dataset_parameters', 'create_loader'
+    "ParFlowDataset",
+    "load_data",
+    "LoaderConfig",
+    "create_loader",
 ]

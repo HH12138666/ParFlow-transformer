@@ -22,7 +22,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from openstl.datasets.parflow.paths import extract_hour_id, prepare_press_evap_files, resolve_parflow_roots
-from openstl.datasets.parflow.readers import read_evap_frame, read_press_frame, read_static_stack
 
 # APCP pfb 通常是 m/s 或等价通量，这里乘 3600 转成每小时降雨深度。
 SECONDS_PER_HOUR = 3600.0

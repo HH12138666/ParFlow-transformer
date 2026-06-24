@@ -7,7 +7,7 @@ import subprocess
 import sys
 import warnings
 import numpy as np
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 
 import torch
 import torchvision
@@ -16,7 +16,6 @@ import torch.multiprocessing as mp
 import openstl
 from .config_utils import Config
 from .dist_utils import is_main_process
-import time
 
 
 def set_seed(seed, deterministic=False):
@@ -138,22 +137,14 @@ def output_namespace(namespace):
 
 
 def check_dir(path):
-    if not os.path.exists(path):
-        time.sleep(10)  # 确保文件系统有时间处理请求
-        os.makedirs(path, exist_ok=True)
-        return False
+    os.makedirs(path, exist_ok=True)
     return True
 
 
 def get_dataset(dataname, config):
-    from openstl.datasets import dataset_parameters
     from openstl.datasets import load_data
-    config.update(dataset_parameters[dataname])
     return load_data(**config)
 
-
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def measure_throughput(model, input_dummy):
@@ -200,52 +191,7 @@ def measure_throughput(model, input_dummy):
     return Throughput
 
 
-def load_config(filename:str = None):
-    """load and print config"""
-    print('loading config from ' + filename + ' ...')
-    try:
-        configfile = Config(filename=filename)
-        config = configfile._cfg_dict
-    except (FileNotFoundError, IOError):
-        config = dict()
-        print('warning: fail to load the config!')
-    return config
-
-
-def update_config(args, config, exclude_keys=list()):
-    """update the args dict with a new config"""
-    assert isinstance(args, dict) and isinstance(config, dict)
-    for k in config.keys():
-        if args.get(k, False):
-            if args[k] != config[k] and k not in exclude_keys and args[k] is not None:
-                print(f'overwrite config key -- {k}: {config[k]} -> {args[k]}')
-            else:
-                args[k] = config[k]
-        else:
-            args[k] = config[k]
-    return args
-
-
-def weights_to_cpu(state_dict: OrderedDict) -> OrderedDict:
-    """Copy a model state_dict to cpu.
-
-    Args:
-        state_dict (OrderedDict): Model weights on GPU.
-
-    Returns:
-        OrderedDict: Model weights on GPU.
-    """
-    state_dict_cpu = OrderedDict()
-    for key, val in state_dict.items():
-        state_dict_cpu[key] = val.cpu()
-    # Keep metadata in state_dict
-    state_dict_cpu._metadata = getattr(  # type: ignore
-        state_dict, '_metadata', OrderedDict())
-    return state_dict_cpu
-
-
-def init_random_seed(seed=None, device='cuda'):
-    """Initialize random seed for single-process training."""
-    if seed is not None:
-        return seed
-    return np.random.randint(2**31)
+def load_config(filename):
+    """Load a required Python configuration file."""
+    print(f"loading config from {filename} ...")
+    return dict(Config(filename=filename)._cfg_dict)

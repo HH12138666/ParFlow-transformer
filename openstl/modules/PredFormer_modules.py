@@ -1,8 +1,5 @@
-import torch
 from torch import nn, einsum
 from einops import rearrange
-from einops.layers.torch import Rearrange
-from timm.models.layers import to_2tuple, trunc_normal_
 
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
@@ -44,7 +41,7 @@ class Attention(nn.Module):
         ) if project_out else nn.Identity()
 
     def forward(self, x):
-        b, n, _, h = *x.shape, self.heads
+        h = self.heads
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), qkv)
         dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
@@ -76,8 +73,7 @@ class CrossAttention(nn.Module):
         ) if project_out else nn.Identity()
 
     def forward(self, q_in, kv_in):
-        b, nq, _, h = *q_in.shape, self.heads
-        nk = kv_in.shape[1]
+        h = self.heads
         q = self.to_q(q_in)
         k = self.to_k(kv_in)
         v = self.to_v(kv_in)

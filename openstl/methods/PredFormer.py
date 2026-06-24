@@ -1,129 +1,105 @@
 import time
+
 import torch
 import torch.nn as nn
-from tqdm import tqdm
 from timm.utils import AverageMeter
-import torch.nn.functional as F
+from tqdm import tqdm
 
 from openstl.models import PredFormer_Model
+from openstl.models.rollout import merge_pred_with_aux
+
 from .base_method import Base_method
+
 
 class PredFormer(Base_method):
     def __init__(self, args, device, steps_per_epoch):
-        Base_method.__init__(self, args, device, steps_per_epoch)
-        self.model = self._build_model(self.config)
-        self.model_optim, self.scheduler, self.by_epoch = self._init_optimizer(steps_per_epoch)
+        super().__init__(args, device, steps_per_epoch)
+        self.model = PredFormer_Model(self.config["model_config"]).to(self.device)
+        self.model_optim, self.scheduler, self.by_epoch = self._init_optimizer(
+            steps_per_epoch
+        )
         self.criterion = nn.MSELoss()
-        
-    def _build_model(self, args):
-        return PredFormer_Model(**args).to(self.device)
-    
-    def _merge_pred_with_aux(self, pred, prev_seq):
-        """Pad predicted channels with auxiliary input channels for autoregressive rollout."""
-        if not hasattr(self.model, "in_channels") or not hasattr(self.model, "out_channels"):
-            return pred
-        in_ch = self.model.in_channels
-        out_ch = self.model.out_channels
-        # Prefer full input channel count (before static projection) when available.
-        input_ch = getattr(self.model, "input_channels", in_ch)
-        if input_ch == out_ch:
-            return pred
-        if prev_seq.shape[2] < input_ch:
-            raise ValueError(f"Input has {prev_seq.shape[2]} channels, expected {input_ch}")
-        if out_ch > input_ch:
-            raise ValueError(f"Output channels {out_ch} cannot exceed input channels {input_ch}")
-        aux = prev_seq[:, :, out_ch:input_ch, :, :]
-        return torch.cat([pred, aux], dim=2)
 
     def _predict(self, batch_x, batch_y=None, **kwargs):
-        """Forward the model"""
-        if self.args.aft_seq_length == self.args.pre_seq_length:
-            pred_y = self.model(batch_x)
-        elif self.args.aft_seq_length < self.args.pre_seq_length:
-            pred_y = self.model(batch_x)
-            pred_y = pred_y[:, :self.args.aft_seq_length]
-        elif self.args.aft_seq_length > self.args.pre_seq_length:
-            pred_y = []
-            d = self.args.aft_seq_length // self.args.pre_seq_length
-            m = self.args.aft_seq_length % self.args.pre_seq_length
-            
-            cur_seq = batch_x.clone()
-            for _ in range(d):
-                pred_block = self.model(cur_seq)
-                pred_y.append(pred_block)
-                cur_seq = self._merge_pred_with_aux(pred_block, cur_seq)
+        del batch_y, kwargs
+        pre = self.args.pre_seq_length
+        aft = self.args.aft_seq_length
+        if aft <= pre:
+            return self.model(batch_x)[:, :aft]
+        return self._rollout(batch_x, aft, pre)
 
-            if m != 0:
-                pred_block = self.model(cur_seq)
-                pred_y.append(pred_block[:, :m])
-            
-            pred_y = torch.cat(pred_y, dim=1)
-        return pred_y
-    
+    def _rollout(self, batch_x, aft, block_size):
+        predictions = []
+        current = batch_x
+        while sum(block.shape[1] for block in predictions) < aft:
+            block = self.model(current)
+            remaining = aft - sum(item.shape[1] for item in predictions)
+            predictions.append(block[:, :remaining])
+            if remaining <= block_size:
+                break
+            current = merge_pred_with_aux(
+                block,
+                current,
+                self.model.input_channels,
+                self.model.out_channels,
+            )
+        return torch.cat(predictions, dim=1)
+
     def train_one_epoch(self, runner, train_loader, epoch, num_updates, **kwargs):
-        """Train the model with train_loader."""
-        data_time_m = AverageMeter()
-        losses_m = AverageMeter()
+        del kwargs
+        data_time = AverageMeter()
+        losses = AverageMeter()
         self.model.train()
         if self.by_epoch:
             self.scheduler.step(epoch)
-        train_pbar = tqdm(train_loader) if self.rank == 0 else train_loader
-
+        progress = tqdm(train_loader) if self.rank == 0 else train_loader
         end = time.time()
-
-        for batch_x, batch_y in train_pbar:
-            data_time_m.update(time.time() - end)
-            self.model_optim.zero_grad()
-
-            if not self.args.use_prefetcher:
-                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
-
-            with self.amp_autocast():
-                pred_y = self._predict(batch_x, batch_y=batch_y)
-                pred_y_loss = pred_y
-                batch_y_loss = batch_y
-                if pred_y_loss.shape[2] != batch_y_loss.shape[2]:
-                    raise ValueError(
-                        f"Loss expects matching output channels, got "
-                        f"{pred_y_loss.shape[2]} (pred) and {batch_y_loss.shape[2]} (true)."
-                    )
-                loss = self.criterion(
-                    pred_y_loss,
-                    batch_y_loss,
-                )
-
-            losses_m.update(loss.item(), batch_x.size(0))
-
-            if self.loss_scaler is not None:
-                if torch.any(torch.isnan(loss)) or torch.any(torch.isinf(loss)):
-                    raise ValueError("Inf or nan loss value. Please use fp32 training!")
-                self.loss_scaler(
-                    loss, self.model_optim,
-                    clip_grad=self.args.clip_grad, clip_mode=self.args.clip_mode,
-                    parameters=self.model.parameters())
-            else:
-                loss.backward()
-                self.clip_grads(self.model.parameters())
-                self.model_optim.step()
-
-            torch.cuda.synchronize()
+        for batch_x, batch_y in progress:
+            data_time.update(time.time() - end)
+            loss = self._train_batch(batch_x, batch_y)
+            losses.update(loss, batch_x.size(0))
             num_updates += 1
-
-            if not self.by_epoch:
-                self.scheduler.step()
             runner._iter += 1
-
-            if self.rank == 0:
-
-                log_buffer = 'train loss: {:.4f}'.format(   loss.item())
-                log_buffer += ' | data time: {:.4f}'.format(data_time_m.avg)
-                train_pbar.set_description(log_buffer)
-
-            end = time.time()  # end for
-
-        if hasattr(self.model_optim, 'sync_lookahead'):
+            self._update_progress(progress, loss, data_time.avg)
+            end = time.time()
+        if hasattr(self.model_optim, "sync_lookahead"):
             self.model_optim.sync_lookahead()
+        return num_updates, losses
 
-        
+    def _train_batch(self, batch_x, batch_y):
+        batch_x = batch_x.to(self.device)
+        batch_y = batch_y.to(self.device)
+        self.model_optim.zero_grad()
+        with self.amp_autocast():
+            pred_y = self._predict(batch_x)
+            self._check_eval_channels(pred_y, batch_y)
+            loss = self.criterion(pred_y, batch_y)
+        self._step_optimizer(loss)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+        if not self.by_epoch:
+            self.scheduler.step()
+        return loss.item()
 
-        return num_updates, losses_m
+    def _step_optimizer(self, loss):
+        if not torch.isfinite(loss):
+            raise ValueError("Training loss is NaN or Inf")
+        if self.loss_scaler is not None:
+            self.loss_scaler(
+                loss,
+                self.model_optim,
+                clip_grad=self.args.clip_grad,
+                clip_mode=self.args.clip_mode,
+                parameters=self.model.parameters(),
+            )
+            return
+        loss.backward()
+        self.clip_grads(self.model.parameters())
+        self.model_optim.step()
+
+    def _update_progress(self, progress, loss, data_time):
+        if self.rank != 0:
+            return
+        progress.set_description(
+            f"train loss: {loss:.4f} | data time: {data_time:.4f}"
+        )

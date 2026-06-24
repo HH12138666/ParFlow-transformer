@@ -1,21 +1,21 @@
-import os
 import os.path as osp
 import time
 import logging
 import json
-import numpy as np
 from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 import torch
-import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from openstl.core import Recorder
+from openstl.core.training import ExperimentTrainingMixin
+from openstl.core.checkpoint import (
+    extract_state_dict, load_checkpoint, load_model_state, save_training_checkpoint,
+)
 from openstl.methods import method_maps
 from openstl.utils import (set_seed, print_log, output_namespace, check_dir, collect_env,
-                           get_dataset, measure_throughput, weights_to_cpu, barrier)
+                           get_dataset, measure_throughput)
 
 
-class BaseExperiment(object):
+class BaseExperiment(ExperimentTrainingMixin):
     """The basic class of PyTorch training and evaluation."""
 
     def __init__(self, args, dataloaders=None):
@@ -132,71 +132,51 @@ class BaseExperiment(object):
             self.vali_loader = self.test_loader
         self._max_iters = self._max_epochs * len(self.train_loader)
 
-    def _save(self, name=''):
-        """Saving models and meta data to checkpoints"""
+    def _save(self, name=""):
         if self._rank != 0:
             return
-        model_to_save = self.method.model.module if hasattr(self.method.model, 'module') else self.method.model
-        checkpoint = {
-            'epoch': self._epoch + 1,
-            'optimizer': self.method.model_optim.state_dict(),
-            'state_dict': weights_to_cpu(model_to_save.state_dict()),
-            'scheduler': self.method.scheduler.state_dict()}
-        torch.save(checkpoint, osp.join(self.checkpoints_path, name + '.pth'))
+        save_training_checkpoint(
+            osp.join(self.checkpoints_path, name + ".pth"),
+            self.method.model, self.method.model_optim, self.method.scheduler,
+            self._epoch + 1,
+        )
 
     def _resolve_checkpoint_path(self, name):
         if osp.isfile(name):
             return name
-        filename = osp.join(self.checkpoints_path, name + '.pth')
+        filename = osp.join(self.checkpoints_path, name + ".pth")
         if not osp.isfile(filename):
-            raise FileNotFoundError(f'Checkpoint not found: {filename}')
+            raise FileNotFoundError(f"Checkpoint not found: {filename}")
         return filename
 
-    def _load(self, name=''):
-        """Loading models from the checkpoint."""
+    def _load(self, name=""):
         filename = self._resolve_checkpoint_path(name)
-        checkpoint = torch.load(filename, map_location=self.device)
-        if not isinstance(checkpoint, dict) or 'state_dict' not in checkpoint:
-            raise RuntimeError(f'No state_dict found in checkpoint file {filename}')
-        self._load_from_state_dict(checkpoint['state_dict'])
-        if checkpoint.get('epoch', None) is not None:
-            self._epoch = checkpoint['epoch']
-            self.method.model_optim.load_state_dict(checkpoint['optimizer'])
-            self.method.scheduler.load_state_dict(checkpoint['scheduler'])
-        print_log(f'Loaded checkpoint for resume from: {filename}')
+        checkpoint = load_checkpoint(filename, self.device)
+        self._load_from_state_dict(extract_state_dict(checkpoint))
+        if checkpoint.get("epoch") is not None:
+            self._epoch = checkpoint["epoch"]
+            self.method.model_optim.load_state_dict(checkpoint["optimizer"])
+            self.method.scheduler.load_state_dict(checkpoint["scheduler"])
+        print_log(f"Loaded checkpoint for resume from: {filename}")
 
     def _load_from_state_dict(self, state_dict):
-        model_to_load = self.method.model.module if hasattr(self.method.model, 'module') else self.method.model
-        model_to_load.load_state_dict(state_dict)
+        load_model_state(self.method.model, state_dict)
 
-    def _load_pretrained_weights(self, name=''):
-        """Load only model weights for finetuning.
-
-        Unlike ``_load``, this will not restore optimizer, scheduler, or epoch
-        state, so the current run starts a fresh optimization process while
-        reusing pretrained parameters.
-        """
-        filename = name if osp.isfile(name) else osp.join(self.checkpoints_path, name + '.pth')
-        checkpoint = torch.load(filename, map_location=self.device)
-
-        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
-            state_dict = checkpoint['state_dict']
-        elif isinstance(checkpoint, dict):
-            state_dict = checkpoint
-        else:
-            raise RuntimeError(f'No state_dict found in checkpoint file {filename}')
-
-        self._load_from_state_dict(state_dict)
+    def _load_pretrained_weights(self, name=""):
+        filename = self._resolve_checkpoint_path(name)
+        checkpoint = load_checkpoint(filename, self.device)
+        self._load_from_state_dict(extract_state_dict(checkpoint))
         self._epoch = 0
-        print_log(f'Loaded pretrained weights for finetuning from: {filename}')
+        print_log(f"Loaded pretrained weights for finetuning from: {filename}")
 
     def _load_best_checkpoint(self):
-        best_model_path = osp.join(self.path, 'checkpoint.pth')
-        self._load_from_state_dict(torch.load(best_model_path, map_location=self.device))
+        filename = osp.join(self.path, "checkpoint.pth")
+        self._load_from_state_dict(extract_state_dict(load_checkpoint(filename, self.device)))
 
     def _load_latest_checkpoint(self):
-        latest_model_path = osp.join(self.checkpoints_path, 'latest.pth')
-        self._load_from_state_dict(torch.load(latest_model_path, map_location=self.device)['state_dict'])
+        filename = osp.join(self.checkpoints_path, "latest.pth")
+        self._load_from_state_dict(extract_state_dict(load_checkpoint(filename, self.device)))
+
 
     def display_method_info(self):
         """Plot the basic infomation of supported methods"""
@@ -225,166 +205,3 @@ class BaseExperiment(object):
         else:
             fps = ''
         print_log('Model info:\n' + info+'\n' + flops+'\n' + fps + dash_line)
-
-
-    def _after_training(self, load_best=False):
-        if self._distributed:
-            barrier()
-        if not check_dir(self.path):
-            assert False and "Exit training because work_dir is removed"
-        if self._distributed and hasattr(self.method.model, 'module'):
-            self.method.model = self.method.model.module
-        if load_best:
-            self._load_best_checkpoint()
-        time.sleep(1)
-
-    def _current_lr_mean(self):
-        cur_lr = self.method.current_lr()
-        return sum(cur_lr) / len(cur_lr)
-
-    def _train_with_val(self, num_updates):
-        recorder = Recorder(
-            verbose=True,
-            early_stop_time=min(self._max_epochs // 10, 10),
-            monitor_name='rmse',
-        )
-        early_stop = False
-        for epoch in range(self._epoch, self._max_epochs):
-            num_updates, loss_mean = self._run_train_epoch(epoch, num_updates)
-            if epoch % self.args.log_step == 0:
-                early_stop = self._run_val_logging(epoch, loss_mean, recorder)
-            if self._use_gpu and self.args.empty_cache:
-                torch.cuda.empty_cache()
-            if epoch > self._early_stop and early_stop:
-                print_log('Early stop training at {} epoch'.format(epoch + 1))
-                break
-        self._after_training(load_best=True)
-
-    def _train_fixed_epoch(self, num_updates):
-        save_interval = int(getattr(self.args, 'save_interval', 1))
-        test_interval = int(getattr(self.args, 'test_interval', 0))
-        if save_interval <= 0:
-            raise ValueError(f'save_interval must be positive, got {save_interval}')
-        if test_interval < 0:
-            raise ValueError(f'test_interval must be >= 0, got {test_interval}')
-        for epoch in range(self._epoch, self._max_epochs):
-            num_updates, loss_mean = self._run_train_epoch(epoch, num_updates)
-            if epoch % self.args.log_step == 0 and self._rank == 0:
-                self._log_train_only_epoch(epoch, loss_mean)
-            if (epoch + 1) % save_interval == 0:
-                self._save(name=f'epoch_{epoch + 1:04d}')
-                self._save(name='latest')
-            if test_interval > 0 and (epoch + 1) % test_interval == 0 and self._rank == 0:
-                print_log(f'test_monitoring at epoch {epoch + 1}: not used for checkpoint selection')
-                with torch.no_grad():
-                    self.test()
-            if self._use_gpu and self.args.empty_cache:
-                torch.cuda.empty_cache()
-        self._save(name='latest')
-        self._after_training(load_best=False)
-
-    def _run_train_epoch(self, epoch, num_updates):
-        if self._distributed and hasattr(self.train_loader, 'sampler'):
-            if hasattr(self.train_loader.sampler, 'set_epoch'):
-                self.train_loader.sampler.set_epoch(epoch)
-        num_updates, loss_mean = self.method.train_one_epoch(
-            self, self.train_loader, epoch, num_updates
-        )
-        self._epoch = epoch
-        return num_updates, loss_mean
-
-    def _run_val_logging(self, epoch, loss_mean, recorder):
-        early_stop = False
-        if self._rank == 0:
-            with torch.no_grad():
-                vali_stats = self.vali()
-            self._log_val_epoch(epoch, loss_mean, vali_stats)
-            early_stop = recorder(vali_stats['rmse'], self.method.model, self.path)
-            self._save(name='latest')
-        if self._distributed:
-            stop_tensor = torch.tensor(int(early_stop), device=self.device)
-            dist.broadcast(stop_tensor, src=0)
-            early_stop = bool(stop_tensor.item())
-        return early_stop
-
-    def _log_val_epoch(self, epoch, loss_mean, vali_stats):
-        print_log(
-            'Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | '
-            'Vali Loss: {4:.7f} | Vali RMSE: {5:.7f}\n'.format(
-                epoch + 1,
-                len(self.train_loader),
-                self._current_lr_mean(),
-                loss_mean.avg,
-                vali_stats['loss'],
-                vali_stats['rmse'],
-            )
-        )
-
-    def _log_train_only_epoch(self, epoch, loss_mean):
-        print_log(
-            'Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | '
-            'Val disabled: fixed-epoch training, latest checkpoint will be reported\n'.format(
-                epoch + 1,
-                len(self.train_loader),
-                self._current_lr_mean(),
-                loss_mean.avg,
-            )
-        )
-
-    def train(self):
-        """Training loops of STL methods."""
-        num_updates = self._epoch * self.steps_per_epoch
-        if getattr(self.args, 'use_val', True):
-            print_log('Training mode: validation + early stopping/checkpoint selection')
-            self._train_with_val(num_updates)
-            return
-        print_log('Training mode: fixed epoch, validation disabled, latest checkpoint reported')
-        self._train_fixed_epoch(num_updates)
-
-    def vali(self):
-        """A validation loop during training"""
-        t0 = time.time()
-        results, eval_log = self.method.vali_one_epoch(self, self.vali_loader)
-        t1 = time.time()
-
-        eval_res = results.get('metric_dict', None)
-        if eval_res is None:
-            raise RuntimeError("Validation metric_dict is missing. Please check vali_one_epoch output.")
-
-        val_msg = f"val_timing\tforward_collect={t1 - t0:.2f}s"
-        print_log(val_msg)
-        results['metrics'] = np.array([eval_res[k] for k in self.method.metric_list], dtype=np.float32)
-        
-        print_log('val\t '+eval_log)
-
-        return {
-            'loss': float(results['loss'].mean()),
-            'rmse': float(eval_res['rmse']),
-        }
-
-    def test(self):
-        """A testing loop of STL methods"""
-        if self.args.test:
-            if getattr(self.args, 'use_val', True):
-                self._load_best_checkpoint()
-            else:
-                self._load_latest_checkpoint()
-
-        t0 = time.time()
-        results = self.method.test_one_epoch(self, self.test_loader)
-        t1 = time.time()
-
-        eval_res = results.get('metric_dict', None)
-        eval_log = results.get('eval_log', '')
-        if eval_res is None:
-            raise RuntimeError("Test metric_dict is missing. Please check test_one_epoch output.")
-
-        print_log(f"test_timing\tforward_collect={t1 - t0:.2f}s")
-        print_log(eval_log)
-        # Saving test outputs is intentionally disabled.
-
-        if 'rmse' not in eval_res:
-            raise KeyError(
-                "Test metric_dict must contain 'rmse' because ParFlow metrics are configured as ['mae', 'rmse']."
-            )
-        return eval_res['rmse']

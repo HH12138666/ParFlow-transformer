@@ -1,3 +1,24 @@
+Metadata-Version: 2.4
+Name: parflow-predformer
+Version: 0.2.0
+Summary: PredFormer surrogate modeling for ParFlow pressure prediction
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: einops
+Requires-Dist: fvcore
+Requires-Dist: numpy==1.26.4
+Requires-Dist: opencv-python
+Requires-Dist: pftools
+Requires-Dist: timm<=0.6.11,>=0.5.4
+Requires-Dist: torch>=2.0
+Requires-Dist: torchvision
+Requires-Dist: tqdm
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
 # ParFlow-PredFormer
 
 使用 PredFormer 根据连续 ParFlow 状态预测未来压力场。当前默认输入为前 12 小时数据，预测后 12 小时 pressure。
