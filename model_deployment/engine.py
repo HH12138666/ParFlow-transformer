@@ -8,24 +8,8 @@ from parflow.tools.io import write_pfb
 
 from openstl.datasets.parflow.dataset import build_space_coords
 from openstl.datasets.parflow.readers import read_combined_frame, read_evap_frame
-from openstl.models.rollout import merge_pred_with_aux
 
 from .common import DEVICE, autocast_ctx, require_model_key, sync_cuda
-def predict_sequence(model, x, pre_seq, aft_seq, c_in, out_channels):
-    if aft_seq == pre_seq:
-        return model(x)
-    if aft_seq < pre_seq:
-        return model(x)[:, :aft_seq]
-    pred_blocks, cur_seq = [], x.clone()
-    for _ in range(aft_seq // pre_seq):
-        pred = model(cur_seq)
-        pred_blocks.append(pred)
-        cur_seq = merge_pred_with_aux(pred, cur_seq, c_in, out_channels)
-    if aft_seq % pre_seq:
-        pred_blocks.append(model(cur_seq)[:, :aft_seq % pre_seq])
-    return torch.cat(pred_blocks, dim=1)
-
-
 class SimpleSources:
     def __init__(self, pred_full):
         self.height = pred_full.shape[-2]
@@ -35,12 +19,10 @@ class SimpleSources:
 def space_shape(cfg, sources):
     return int(cfg.get("space_h") or sources.height), int(cfg.get("space_w") or sources.width)
 
-def predict_full_block(model, x, coords, spec, sources, config, timing):
+def predict_full_block(model, x, coords, spec, sources, config, timing, block):
     cfg = spec.model_config
-    pre_seq = int(require_model_key(cfg, "pre_seq"))
-    aft_seq = int(require_model_key(cfg, "after_seq"))
     out_channels = int(require_model_key(cfg, "out_channels"))
-    pred_full = np.zeros((aft_seq, out_channels, sources.height, sources.width), dtype=np.float32)
+    pred_full = np.zeros((block, out_channels, sources.height, sources.width), dtype=np.float32)
     counts = np.zeros_like(pred_full, dtype=np.int32)
     for start in range(0, len(coords), config.patch_batch_size):
         chunk = coords[start:start + config.patch_batch_size]
@@ -49,7 +31,7 @@ def predict_full_block(model, x, coords, spec, sources, config, timing):
         sync_cuda()
         forward_start = time.perf_counter()
         with torch.inference_mode(), autocast_ctx(config):
-            pred = predict_sequence(model, x_batch, pre_seq, aft_seq, sources.c_in, out_channels)
+            pred = model(x_batch)[:, :block]
         sync_cuda()
         timing.forward_time += time.perf_counter() - forward_start
         stitch_predictions(pred.float().cpu().numpy(), pred_full, counts, chunk)
@@ -152,12 +134,15 @@ def run_one_window(config, model, history, t0, coords, out_dir, spec, sources, s
     pre_seq = int(require_model_key(cfg, "pre_seq"))
     aft_seq = int(require_model_key(cfg, "after_seq"))
     out_channels = int(require_model_key(cfg, "out_channels"))
+    block_capacity = min(pre_seq, aft_seq)
     target_hours = config.rollout_hours if config.use_rollout else aft_seq
     predicted = 0
     while predicted < target_hours:
-        block = min(aft_seq, target_hours - predicted)
+        block = min(block_capacity, target_hours - predicted)
         x = normalize_history(history[-pre_seq:], stats)
-        pred_full = predict_full_block(model, x, coords, spec, sources, config, timing)
+        pred_full = predict_full_block(
+            model, x, coords, spec, sources, config, timing, block
+        )
         pred_full = pred_full * stats.std_y_eps + stats.mean_y
         write_prediction_block(pred_full, t0 + pre_seq, predicted, block, out_dir, sources, out_channels, timing)
         for k in range(block):

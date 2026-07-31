@@ -37,6 +37,11 @@ class PredFormer_Model(nn.Module):
         self.num_patches_w = self.image_width // self.patch_size
         self.num_patches = self.num_patches_h * self.num_patches_w
         self.num_frames_in = int(config["pre_seq"])
+        requested_frames_out = int(config["after_seq"])
+        if requested_frames_out <= 0:
+            raise ValueError(f"after_seq must be positive, got {requested_frames_out}")
+        # Long horizons are assembled from pre_seq-sized autoregressive blocks.
+        self.num_frames_out = min(requested_frames_out, self.num_frames_in)
 
     def _init_channels(self, config):
         self.in_channels = int(config.get("in_channels", config.get("num_channels")))
@@ -194,14 +199,8 @@ class PredFormer_Model(nn.Module):
         return dynamic, static
 
     def _project_static(self, static, batch, frames):
-        static = static.reshape(
-            batch * frames,
-            self.static_in_channels,
-            self.image_height,
-            self.image_width,
-        )
-        static = self.static_proj(static)
-        return static.reshape(
+        static = self.static_proj(static[:, 0])
+        return static.unsqueeze(1).expand(
             batch,
             frames,
             self.static_out_channels,
@@ -230,25 +229,28 @@ class PredFormer_Model(nn.Module):
         return query.reshape(batch, frames, patches, self.dim)
 
     def _transform(self, tokens, static):
-        batch, frames, patches, _ = tokens.shape
+        batch, _, patches, _ = tokens.shape
         temporal = rearrange(tokens, "b t n d -> (b n) t d")
         temporal = self.temporal_transformer(temporal)
-        spatial = rearrange(temporal, "(b n) t d -> (b t) n d", b=batch)
+        temporal = rearrange(
+            temporal, "(b n) t d -> b t n d", b=batch, n=patches
+        )[:, : self.num_frames_out]
+        spatial = rearrange(temporal, "b t n d -> (b t) n d")
         spatial = self.space_transformer(spatial)
         if self.attn_type != "post_cross":
             return spatial
-        pos = self.pos_embedding.to(spatial.device)
-        dynamic_tokens = spatial.reshape(batch, frames, patches, self.dim)
+        pos = self.pos_embedding[:, : self.num_frames_out].to(spatial.device)
+        static = static[:, : self.num_frames_out]
         static_tokens = self.to_patch_embedding_static(static) + pos
-        query = dynamic_tokens.reshape(batch * frames, patches, self.dim)
-        key_value = static_tokens.reshape(batch * frames, patches, self.dim)
-        return query + self.pre_cross_attn(
-            self.pre_cross_norm_q(query),
+        key_value = rearrange(static_tokens, "b t n d -> (b t) n d")
+        return spatial + self.pre_cross_attn(
+            self.pre_cross_norm_q(spatial),
             self.pre_cross_norm_kv(key_value),
         )
 
     def _decode(self, tokens, input_shape):
-        batch, frames, height, width, valid = input_shape
+        batch, _, height, width, valid = input_shape
+        frames = self.num_frames_out
         x = self.mlp_head(tokens.reshape(-1, self.dim))
         x = x.view(
             batch,

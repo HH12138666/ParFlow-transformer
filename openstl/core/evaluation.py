@@ -39,8 +39,8 @@ class EvaluationRunner:
     def _collect_arrays(self, data_loader):
         results = []
         progress = ProgressBar(len(data_loader))
-        for batch_x, batch_y in data_loader:
-            pred_y, batch_y = self._predict_batch(batch_x, batch_y)
+        for batch_x, batch_y, future_aux in data_loader:
+            pred_y, batch_y = self._predict_batch(batch_x, batch_y, future_aux)
             results.append(
                 {
                     "preds": pred_y.cpu().numpy(),
@@ -65,8 +65,8 @@ class EvaluationRunner:
         losses = []
         offset = 0
         progress = ProgressBar(len(data_loader))
-        for batch_x, batch_y in data_loader:
-            pred_y, batch_y = self._predict_batch(batch_x, batch_y)
+        for batch_x, batch_y, future_aux in data_loader:
+            pred_y, batch_y = self._predict_batch(batch_x, batch_y, future_aux)
             losses.append(self._loss_array(pred_y, batch_y))
             offset = self._consume_batch(dataset, state, pred_y, batch_y, offset)
             progress.update()
@@ -81,11 +81,14 @@ class EvaluationRunner:
             self._format_log(eval_res),
         )
 
-    def _predict_batch(self, batch_x, batch_y):
+    def _predict_batch(self, batch_x, batch_y, future_aux):
         with torch.inference_mode():
             batch_x = batch_x.to(self.method.device)
             batch_y = batch_y.to(self.method.device)
-            pred_y = self.method._predict(batch_x, batch_y)
+            future_aux = future_aux.to(self.method.device)
+            pred_y = self.method._predict(
+                batch_x, batch_y, future_aux=future_aux
+            )
         self.method._check_eval_channels(pred_y, batch_y)
         return pred_y, batch_y
 

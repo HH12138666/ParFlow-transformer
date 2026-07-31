@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
+# sbatch /home/huanghui/data/slurm_job/build_extra_manifest_from_candidates.sh
+"""根据 APCP 降雨强度生成额外训练样本 manifest。
 
-"""根据降雨 pfb 直接生成额外训练数据 CSV。
-
-这个脚本是第一个功能入口：
-1. 读取指定 APCP 降雨目录。
-2. 按模型样本方式生成 24h、stride=6h 的候选窗口。
-3. 按配置区定义的策略，输出后续训练可读取的 extra manifest CSV。
+这个脚本是额外训练样本的唯一入口：
+1. 支持一个或多个增强数据源，例如 APCP×1.4、APCP×1.8。
+2. 只保留 dry/light/moderate/heavy 四种 24h 降雨强度情景。
+3. 输出训练代码可直接读取的 CSV，包含 data_root 和 press 起始时刻 t0。
 """
-import argparse
+from __future__ import annotations
+
 import csv
 from pathlib import Path
 
@@ -20,192 +21,270 @@ from parflow_extra_data_common import (
     prepare_frame_files,
     read_apcp_hourly,
 )
+
 # ===================== 用户配置区 =====================
-# APCP_DIRS: 额外数据对应的降雨 forcing 目录，可以一次写多个年份。
-# 工具会先分别在每个目录内生成 24h/stride=6h 候选窗口，再合并后统一筛选。
-APCP_DIRS = []
+# 输出目录：生成的 extra manifest CSV 都会放在这里。
+OUT_DIR = Path("/home/huanghui/data/ParFlow-transformer/data/parflow/extra_data_index")
 
-# APCP_DIR: 单目录兼容入口；当 APCP_DIRS 为空时才会使用它。
-APCP_DIR = ""
+# 只用训练年份生成额外训练数据；2019 是测试集，不放进这里。
+YEARS = (2020, 2021)
 
-# EXTRA_DATA_ROOT: 额外 ParFlow 动态数据根目录，只用于检查 t0 是否能组成完整样本。
-# 注意：CSV 只写 split 和 t0，不写 data_root；训练时仍通过 --extra_data_root 指定这个目录。
-EXTRA_DATA_ROOT = ""
-
-# WINDOW_HOURS: 一个训练样本需要的总小时数，输入 12h + 输出 12h = 24h。
+# 一个训练样本总长度：输入 12h + 输出 12h = 24h。
 WINDOW_HOURS = 24
 
-# OUT_DIR: 输出 CSV 的目录。
-OUT_DIR = str(Path(__file__).resolve().parents[1] / "extra_data" / "extra_apcp14_training_design")
+# APCP 文件从 h+1 开始，press 样本从 h 开始，所以 APCP 起点转 press t0 要减 1。
+APCP_TO_PRESS_T0_OFFSET = -1
 
-# SELECT_MODE: 选择你这次要生成哪一种额外训练数据 CSV。
-# 可选值：
-# "all"       = 加入全部候选样本。
-# "top_hours" = 按降雨指标排序，只加入降雨最强的一部分。
-# "regime"    = 只加入指定降雨情景。
+# 额外数据源；可以保留一个，也可以同时保留多个。
+SOURCES = [
+    {
+        "name": "apcp14",
+        "apcp_root": Path("/home/huanghui/data/ParFlow_train_data/parflow_forcing/APCP1.4"),
+        "data_root": "/home/huanghui/data/ParFlow-transformer/data/parflow/extra_data_apcp14",
+    },
+    {
+        "name": "apcp18",
+        "apcp_root": Path("/home/huanghui/data/ParFlow_train_data/parflow_forcing/APCP1.8"),
+        "data_root": "/home/huanghui/data/ParFlow-transformer/data/parflow/extra_data_apcp18",
+    },
+]
+
+# 本次只生成一份 manifest；你需要什么额外数据，就改这里后重新运行。
+# SELECT_MODE 可选：
+# "all"       = 保留全部候选样本。
+# "top_hours" = 按降雨指标从大到小选择一部分样本。
+# "regime"    = 按 dry/light/moderate/heavy 情景选择样本。
+JOB_NAME = "heavy_all"
 SELECT_MODE = "regime"
+OUT_CSV = "extra_apcp_heavy_all_2020_2021.csv"
 
-# OUT_CSV: 本次输出的训练 manifest 文件名。
-OUT_CSV = "extra_apcp14_regime_moderate_heavy_2020_2021.csv"
+# SELECT_REGIMES 只在 SELECT_MODE="regime" 时生效。
+# 可选情景：dry, light, moderate, heavy。
+SELECT_REGIMES = ("heavy",)
 
-# TOP_HOURS / TOP_SCORE: 仅当 SELECT_MODE = "top_hours" 时生效。
-# TOP_HOURS=2400 表示约选 2400 小时；由于样本 stride=6h，实际选 ceil(2400/6) 个窗口。
+# SAMPLE_COUNT=0 表示保留全部命中样本；>0 表示只取指定数量。
+SAMPLE_COUNT = 0
+
+# SAMPLE_SELECT 控制取样顺序：
+# "natural"         = 按时间顺序取前 N 个。
+# "rain_total_desc" = 按 24h 累计降雨从大到小取 N 个。
+# "rain_total_asc"  = 按 24h 累计降雨从小到大取 N 个。
+# "random"          = 固定随机种子随机抽 N 个。
+SAMPLE_SELECT = "rain_total_desc"
+
+# top_hours 模式配置：按 TOP_SCORE 从大到小选 TOP_HOURS/6 个样本。
 TOP_HOURS = 4800
 TOP_SCORE = "rain_total"
 
-# SELECT_REGIMES: 仅当 SELECT_MODE = "regime" 时生效。
-# 多个情景用英文逗号分隔，只要某个 24h 窗口命中任一情景，就会被加入 CSV。
-# 可选情景：dry, light, moderate, heavy, strong_6h, persistent_wet, dry_to_wet, wet_to_dry。
-SELECT_REGIMES = "moderate, heavy"
+# 随机选样时使用的种子。
+RANDOM_SEED = 2026
 # =====================================================
 
 
-def selected_indices(data: dict[str, np.ndarray], job: dict[str, object]) -> np.ndarray:
-    """根据单个 job 的筛选模式，返回应该写入 CSV 的候选窗口下标。"""
-    mode = str(job["mode"])
-    total = len(data["t0"])
-    if mode == "all":
-        return np.arange(total, dtype=np.int64)
-    if mode == "top_hours":
-        return top_hour_indices(data, job, total)
-    if mode == "regime":
-        return np.flatnonzero(build_regime_mask(data, str(job["regimes"])))
-    raise ValueError(f"Invalid mode={mode}; expected all | top_hours | regime")
-
-
-def top_hour_indices(data: dict[str, np.ndarray], job: dict[str, object], total: int) -> np.ndarray:
-    """选出降雨指标最大的若干个 24h 窗口。"""
-    count = int(np.ceil(int(job["top_hours"]) / 6.0))
-    order = np.argsort(np.asarray(data[str(job["score"])], dtype=np.float64))[::-1]
-    return np.sort(order[:min(count, total)])
-
-
-def build_regime_mask(data: dict[str, np.ndarray], regimes_text: str) -> np.ndarray:
-    """把多个降雨情景合成一个布尔掩膜，只要命中任一情景就会被选中。"""
-    regimes = [item.strip() for item in regimes_text.split(",") if item.strip()]
-    unknown = sorted(set(regimes) - set(RAIN_KEYS))
-    if unknown:
-        raise ValueError(f"Unknown regimes: {unknown}; valid={RAIN_KEYS}")
-    mask = np.zeros(len(data["t0"]), dtype=bool)
-    for regime in regimes:
-        mask |= np.asarray(data[regime]).astype(bool)
-    return mask
-
-
-def manifest_path(job: dict[str, object]) -> Path:
-    """得到当前 job 对应的 CSV 输出路径。"""
-    return Path(OUT_DIR) / str(job["out_csv"])
-
-
-def write_manifest(job: dict[str, object], data: dict[str, np.ndarray], indices: np.ndarray) -> None:
-    """把筛选后的候选窗口写成训练可用的最简 CSV。"""
-    fields = ["split", "t0"]
-    path = manifest_path(job)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as file_obj:
-        writer = csv.DictWriter(file_obj, fieldnames=fields)
-        writer.writeheader()
-        for idx in indices:
-            writer.writerow(build_row(data, int(idx)))
-
-
-def build_row(data: dict[str, np.ndarray], idx: int) -> dict[str, object]:
-    """组装 CSV 的一行；训练端会用 extra_data_root 补充数据根目录。"""
-    return {"split": "train", "t0": int(data["t0"][idx])}
-
-
-def run_job(data: dict[str, np.ndarray], job: dict[str, object]) -> None:
-    """执行一个额外数据方案，并打印输出行数。"""
-    indices = selected_indices(data, job)
-    if indices.size == 0:
-        raise ValueError(f"No rows selected for job={job}")
-    write_manifest(job, data, indices)
-    print(f"manifest_rows={indices.size} out={manifest_path(job)}")
+def main() -> None:
+    """生成候选池、写汇总表，并输出本次配置指定的一份 manifest。"""
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    rows = build_candidate_pool()
+    write_summary(rows)
+    job = build_job()
+    selected = select_rows(rows, job)
+    write_manifest(job, selected)
+    print_job_summary(job, selected)
 
 
 def build_job() -> dict[str, object]:
-    """把配置区的单选参数组装成内部使用的 job。"""
-    job = {"mode": SELECT_MODE, "out_csv": OUT_CSV}
-    if SELECT_MODE == "top_hours":
-        job.update({"top_hours": TOP_HOURS, "score": TOP_SCORE})
-    if SELECT_MODE == "regime":
-        job.update({"regimes": SELECT_REGIMES})
-    return job
+    """把顶部配置区组装成本次 manifest 生成任务。"""
+    return {
+        "name": JOB_NAME,
+        "mode": SELECT_MODE,
+        "out_csv": OUT_CSV,
+        "regimes": SELECT_REGIMES,
+        "sample_count": SAMPLE_COUNT,
+        "sample_select": SAMPLE_SELECT,
+        "top_hours": TOP_HOURS,
+        "score": TOP_SCORE,
+    }
 
 
-def active_apcp_dirs() -> list[Path]:
-    """返回本次要读取的 APCP 目录；优先使用多目录配置。"""
-    dirs = [Path(item) for item in APCP_DIRS if str(item).strip()]
-    if dirs:
-        return dirs
-    return [Path(APCP_DIR)]
+def build_candidate_pool() -> list[dict[str, object]]:
+    """合并所有数据源和年份的候选样本。"""
+    rows: list[dict[str, object]] = []
+    for source in SOURCES:
+        source_rows = build_source_rows(source)
+        rows.extend(source_rows)
+    rows.sort(key=lambda row: (int(row["t0"]), str(row["source"])))
+    print(f"candidate_pool_rows={len(rows)}")
+    return rows
 
 
-def build_all_candidates() -> dict[str, np.ndarray]:
-    """分别读取多个 APCP 目录，并把候选窗口合并成一个候选池。"""
-    parts = []
-    for apcp_dir in active_apcp_dirs():
-        hour_ids, apcp = read_apcp_hourly(apcp_dir)
-        part = build_stride_candidates(hour_ids, apcp)
-        print(f"candidate_windows_raw={len(part['t0'])} apcp_dir={apcp_dir}")
-        parts.append(part)
-    return concat_candidates(parts)
+def build_source_rows(source: dict[str, object]) -> list[dict[str, object]]:
+    """读取一个增强数据源，并过滤掉无法组成完整 24h 样本的窗口。"""
+    raw: list[dict[str, object]] = []
+    for year in YEARS:
+        raw.extend(build_source_year_rows(source, int(year)))
+    filtered = filter_complete_rows(raw, str(source["data_root"]))
+    print(f"source={source['name']} raw={len(raw)} usable={len(filtered)}")
+    return filtered
 
 
-def concat_candidates(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-    """合并多个年份候选窗口，并按 t0 排序。"""
-    if not parts:
-        raise ValueError("No APCP candidate parts generated")
-    keys = parts[0].keys()
-    merged = {key: np.concatenate([part[key] for part in parts]) for key in keys}
-    order = np.argsort(merged["t0"].astype(np.int64))
-    return {key: value[order] for key, value in merged.items()}
+def build_source_year_rows(source: dict[str, object], year: int) -> list[dict[str, object]]:
+    """按单个年份生成 stride=6 的 24h 候选窗口。"""
+    apcp_dir = Path(source["apcp_root"]) / str(year)
+    hour_ids, apcp = read_apcp_hourly(apcp_dir)
+    candidates = build_stride_candidates(hour_ids, apcp)
+    rows = candidate_arrays_to_rows(candidates, source, year)
+    print(f"source={source['name']} year={year} raw_windows={len(rows)}")
+    return rows
 
 
-def filter_complete_windows(candidates: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """只保留在额外动态数据中可以组成完整 24h 样本的 t0。"""
-    years = sorted({int(str(hour)[:4]) for hour in candidates["t0"]})
-    press_files, _, _ = prepare_frame_files(EXTRA_DATA_ROOT, years, False, "press", True)
+def candidate_arrays_to_rows(data: dict[str, np.ndarray], source: dict[str, object], year: int) -> list[dict[str, object]]:
+    """把 numpy 候选数组转为带数据源信息的行。"""
+    return [candidate_row(data, source, year, idx) for idx in range(len(data["t0"]))]
+
+
+def candidate_row(data: dict[str, np.ndarray], source: dict[str, object], year: int, idx: int) -> dict[str, object]:
+    """构造单个候选样本行。"""
+    row = {key: scalar(data[key][idx]) for key in data}
+    row["t0"] = int(row["t0"]) + APCP_TO_PRESS_T0_OFFSET
+    row["source"] = str(source["name"])
+    row["data_root"] = str(source["data_root"])
+    row["year"] = int(year)
+    return row
+
+
+def scalar(value: object) -> object:
+    """把 numpy 标量转成 Python 标量，方便 csv 写出。"""
+    return value.item() if hasattr(value, "item") else value
+
+
+def filter_complete_rows(rows: list[dict[str, object]], data_root: str) -> list[dict[str, object]]:
+    """只保留 press/evap 对齐后能组成完整窗口的 t0。"""
+    years = sorted({int(str(row["t0"])[:4]) for row in rows})
+    press_files, _, _ = prepare_frame_files(data_root, years, False, "press", True)
     mapping = hour_to_index(press_files)
-    keep_mask = np.asarray([is_complete_t0(mapping, int(t0)) for t0 in candidates["t0"]])
-    dropped = int(np.count_nonzero(~keep_mask))
-    if dropped:
-        dropped_t0 = candidates["t0"][~keep_mask]
-        print(f"dropped_incomplete_windows={dropped} first={int(dropped_t0[0])} last={int(dropped_t0[-1])}")
-    return {key: value[keep_mask] for key, value in candidates.items()}
+    return [row for row in rows if is_complete_window(mapping, int(row["t0"]))]
 
 
-def is_complete_t0(mapping: dict[int, int], t0: int) -> bool:
-    """判断某个 t0 是否能在 press/evap 对齐后形成完整 WINDOW_HOURS 窗口。"""
+def is_complete_window(mapping: dict[int, int], t0: int) -> bool:
+    """检查 t0 到 t0+23 是否都存在。"""
     return all((t0 + offset) in mapping for offset in range(WINDOW_HOURS))
 
 
-def parse_cli():
-    parser = argparse.ArgumentParser(description="Build an extreme-event training manifest")
-    parser.add_argument("--apcp-dir", action="append", required=True)
-    parser.add_argument("--extra-data-root", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--mode", choices=("all", "top_hours", "regime"), default="regime")
-    parser.add_argument("--regimes", default="moderate,heavy")
-    parser.add_argument("--top-hours", type=int, default=4800)
-    parser.add_argument("--score", default="rain_total")
-    return parser.parse_args()
+def select_rows(rows: list[dict[str, object]], job: dict[str, object]) -> list[dict[str, object]]:
+    """按 job 配置筛选并限制样本数。"""
+    candidates = rows_for_mode(rows, job)
+    ordered = order_rows(candidates, str(job.get("sample_select", "natural")))
+    return limit_rows(ordered, int(job.get("sample_count", 0)), str(job["name"]))
 
 
-def main() -> None:
-    """脚本入口：读降雨、建候选窗口、过滤无效 t0，再按当前选择写一个 CSV。"""
-    global APCP_DIRS, EXTRA_DATA_ROOT, OUT_DIR, OUT_CSV, SELECT_MODE, SELECT_REGIMES, TOP_HOURS, TOP_SCORE
-    args = parse_cli()
-    APCP_DIRS = args.apcp_dir
-    EXTRA_DATA_ROOT = args.extra_data_root
-    output = Path(args.output)
-    OUT_DIR, OUT_CSV = str(output.parent), output.name
-    SELECT_MODE, SELECT_REGIMES = args.mode, args.regimes
-    TOP_HOURS, TOP_SCORE = args.top_hours, args.score
-    candidates = build_all_candidates()
-    candidates = filter_complete_windows(candidates)
-    print(f"candidate_windows={len(candidates['t0'])} apcp_dirs={len(active_apcp_dirs())}")
-    run_job(candidates, build_job())
+def rows_for_mode(rows: list[dict[str, object]], job: dict[str, object]) -> list[dict[str, object]]:
+    """根据 all/top_hours/regime 三种模式返回候选行。"""
+    mode = str(job["mode"])
+    if mode == "all":
+        return list(rows)
+    if mode == "top_hours":
+        return top_hour_rows(rows, job)
+    if mode == "regime":
+        return regime_rows(rows, tuple(job["regimes"]))
+    raise ValueError(f"Invalid job mode={mode}")
+
+
+def top_hour_rows(rows: list[dict[str, object]], job: dict[str, object]) -> list[dict[str, object]]:
+    """选出降雨指标最高的若干个窗口。"""
+    score = str(job.get("score", TOP_SCORE))
+    top_hours = int(job.get("top_hours", TOP_HOURS))
+    count = int(np.ceil(top_hours / 6.0))
+    ordered = sorted(rows, key=lambda row: (-float(row[score]), int(row["t0"])))
+    return ordered[: min(count, len(ordered))]
+
+
+def regime_rows(rows: list[dict[str, object]], regimes: tuple[str, ...]) -> list[dict[str, object]]:
+    """选出命中任一指定降雨情景的窗口。"""
+    validate_regimes(regimes)
+    return [row for row in rows if any(int(row[regime]) == 1 for regime in regimes)]
+
+
+def validate_regimes(regimes: tuple[str, ...]) -> None:
+    """确保只使用 dry/light/moderate/heavy 四种情景。"""
+    unknown = sorted(set(regimes) - set(RAIN_KEYS))
+    if unknown:
+        raise ValueError(f"Unknown regimes: {unknown}; valid={RAIN_KEYS}")
+
+
+def order_rows(rows: list[dict[str, object]], mode: str) -> list[dict[str, object]]:
+    """对候选样本排序。"""
+    if mode == "rain_total_desc":
+        return sorted(rows, key=lambda row: (-float(row["rain_total"]), int(row["t0"])))
+    if mode == "rain_total_asc":
+        return sorted(rows, key=lambda row: (float(row["rain_total"]), int(row["t0"])))
+    if mode == "random":
+        return random_rows(rows)
+    if mode == "natural":
+        return sorted(rows, key=lambda row: (int(row["t0"]), str(row["source"])))
+    raise ValueError(f"Invalid sample_select={mode}")
+
+
+def random_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """固定随机种子打乱候选样本。"""
+    rng = np.random.default_rng(RANDOM_SEED)
+    order = rng.permutation(len(rows))
+    return [rows[int(idx)] for idx in order]
+
+
+def limit_rows(rows: list[dict[str, object]], count: int, name: str) -> list[dict[str, object]]:
+    """限制最终写出的样本数；count=0 表示全保留。"""
+    if count <= 0:
+        return rows
+    if count > len(rows):
+        raise ValueError(f"{name} needs {count} rows, only {len(rows)} available")
+    return rows[:count]
+
+
+def write_manifest(job: dict[str, object], rows: list[dict[str, object]]) -> None:
+    """写出训练代码可读取的 manifest CSV。"""
+    path = OUT_DIR / str(job["out_csv"])
+    fields = ["split", "data_root", "t0", "source", "year", "rain_total", *RAIN_KEYS]
+    with path.open("w", newline="", encoding="utf-8") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(manifest_row(row))
+    print(f"saved_manifest={path} rows={len(rows)}")
+
+
+def manifest_row(row: dict[str, object]) -> dict[str, object]:
+    """只保留训练和复核需要的字段。"""
+    out = {"split": "train", "data_root": row["data_root"], "t0": int(row["t0"])}
+    out.update({"source": row["source"], "year": int(row["year"]), "rain_total": float(row["rain_total"])})
+    out.update({key: int(row[key]) for key in RAIN_KEYS})
+    return out
+
+
+def write_summary(rows: list[dict[str, object]]) -> None:
+    """写出候选池中各来源和各情景的样本数。"""
+    path = OUT_DIR / "extra_apcp_2020_2021_summary.csv"
+    groups = ["all", *sorted({str(row["source"]) for row in rows})]
+    with path.open("w", newline="", encoding="utf-8") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=["group", "rows", *RAIN_KEYS])
+        writer.writeheader()
+        for group in groups:
+            selected = rows if group == "all" else [row for row in rows if row["source"] == group]
+            writer.writerow(summary_row(group, selected))
+    print(f"saved_summary={path}")
+
+
+def summary_row(group: str, rows: list[dict[str, object]]) -> dict[str, object]:
+    """汇总一个来源组的四情景数量。"""
+    out = {"group": group, "rows": len(rows)}
+    out.update({key: sum(int(row[key]) for row in rows) for key in RAIN_KEYS})
+    return out
+
+
+def print_job_summary(job: dict[str, object], rows: list[dict[str, object]]) -> None:
+    """打印每个输出文件的来源和情景数量。"""
+    sources = {source: sum(1 for row in rows if row["source"] == source) for source in sorted({row["source"] for row in rows})}
+    regimes = {key: sum(int(row[key]) for row in rows) for key in RAIN_KEYS}
+    print(f"job={job['name']} rows={len(rows)} sources={sources} regimes={regimes}")
 
 
 if __name__ == "__main__":

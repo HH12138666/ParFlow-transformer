@@ -11,17 +11,17 @@ REPO=/home/huanghui/data/ParFlow-transformer
 export CUDA_VISIBLE_DEVICES=1
 
 # 需要推理的训练结果目录。
-RUN_DIR=/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press/2026-06-12-13-59_FACTS
+RUN_DIR=/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS
 CHECKPOINT_FILE=latest.pth
 
 # 推理数据和输出目录。
 DATA_ROOT=/home/huanghui/data/ParFlow-transformer/data/parflow/normal_data
 OUTPUT_DIR=/home/huanghui/data/ParFlow-transformer/inference_data/press
-RUN_NAME="test"
+RUN_NAME="test1_2021_press_evap_static_train1_19_20_post_k3_cnn3_p8"
 
 # 推理时间范围和 rollout 设置。
-START_HOUR=20190000
-END_HOUR=20198759
+START_HOUR=20210000
+END_HOUR=20218759
 ROLLOUT_HOURS=720
 PATCH_BATCH_SIZE=28
 # =====================================================

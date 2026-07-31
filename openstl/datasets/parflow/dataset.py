@@ -30,16 +30,19 @@ def _axis_coords(size, window, stride):
     return coords
 
 
-def augment_pair(x, y, p_flip_h=0.5, p_flip_w=0.5, p_noise=0.2, noise_sigma=0.001):
+def augment_sample(x, y, future_aux, p_flip_h=0.5, p_flip_w=0.5,
+                   p_noise=0.2, noise_sigma=0.001):
     if torch.rand(1).item() < p_flip_h:
         x = x.flip(-2)
         y = y.flip(-2)
+        future_aux = future_aux.flip(-2)
     if torch.rand(1).item() < p_flip_w:
         x = x.flip(-1)
         y = y.flip(-1)
+        future_aux = future_aux.flip(-1)
     if torch.rand(1).item() < p_noise:
         x = x + torch.randn_like(x) * float(noise_sigma)
-    return x, y
+    return x, y, future_aux
 
 
 class ParFlowDataset(Dataset):
@@ -249,12 +252,16 @@ class ParFlowDataset(Dataset):
         time_idx, top, left = self._sample_location(idx)
         window = self._read_window(time_idx, top=top, left=left)
         x = window[: self.pre]
-        y = window[self.pre:self.pre + self.aft]
+        target_window = window[self.pre:self.pre + self.aft]
+        y = target_window
         if self.out_channels is not None:
             y = y[:, :self.out_channels, :, :]
+        future_aux = target_window[:, self.out_channels:, :, :]
+        if self.aft <= self.pre:
+            future_aux = future_aux[:0]
         if self.use_augment and self.split == "train":
-            x, y = augment_pair(x, y)
-        return self._normalize_x(x), self._normalize_y(y)
+            x, y, future_aux = augment_sample(x, y, future_aux)
+        return self._normalize_x(x), self._normalize_y(y), self._normalize_aux(future_aux)
 
     def _sample_location(self, idx):
         if not self.use_space:
@@ -270,3 +277,10 @@ class ParFlowDataset(Dataset):
         if self.out_channels is None:
             return y.sub(self.mean_t).div(self.std_eps_t)
         return y.sub(self.mean_y_t).div(self.std_y_eps_t)
+
+    def _normalize_aux(self, future_aux):
+        if future_aux.shape[0] == 0:
+            return future_aux
+        mean = self.mean_t[:, self.out_channels:, :, :]
+        std = self.std_eps_t[:, self.out_channels:, :, :]
+        return future_aux.sub(mean).div(std)

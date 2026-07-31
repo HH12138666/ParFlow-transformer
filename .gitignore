@@ -1,17 +1,66 @@
-data/
-work_dirs/
-result_analyze/
-inference_data/
-slurm/logs/*.out
-slurm/logs/*.err
-stats/
-slurm/
-README.md
-# Python bytecode/cache
+# Python cache and local build artifacts
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+data/ParFlow-transformer/model_deployment/inference_onestep_12h.py
 
-# Editor swap/backup files
+
+# Editor and system files
 *.swp
 *.swo
 *~
+.DS_Store
+
+# Logs
+*.out
+*.err
+*.log
+
+# Large model/data artifacts
+*.pfb
+*.pth
+*.pt
+*.ckpt
+*.npz
+*.npy
+*.nc
+*.tif
+*.tiff
+*.h5
+*.hdf5
+
+# Local generated outputs
+/work_dirs/
+/inference_data/
+/result_analyze/
+/paper_figures/
+/stats/
+/slurm/
+
+# Keep data as an empty directory template only
+/data/**
+!/data/
+!/data/.gitkeep
+!/data/parflow/
+!/data/parflow/.gitkeep
+!/data/parflow/normal_data/
+!/data/parflow/normal_data/.gitkeep
+!/data/parflow/normal_data/press/
+!/data/parflow/normal_data/press/.gitkeep
+!/data/parflow/normal_data/evaptrans/
+!/data/parflow/normal_data/evaptrans/.gitkeep
+!/data/parflow/normal_data/static/
+!/data/parflow/normal_data/static/.gitkeep
+!/data/parflow/extra_data_index/
+!/data/parflow/extra_data_index/.gitkeep
+
+# Keep only the basic train and inference example scripts
+/scripts/parflow/*.sh
+!/scripts/parflow/parflow_PredFormer_FacTS_train.sh
+!/scripts/parflow/parflow_PredFormer_FacTS_inference.sh

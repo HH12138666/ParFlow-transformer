@@ -31,11 +31,8 @@ SAMPLE_HOURS = 24
 SAMPLE_STRIDE = 6
 WET_HOUR_THRESHOLD = 0.1
 
-# 固定降雨情景字段，和论文分析中的 24h 样本划分保持一致。
-RAIN_KEYS = (
-    "dry", "light", "moderate", "heavy",
-    "strong_6h", "persistent_wet", "dry_to_wet", "wet_to_dry",
-)
+# 固定降雨情景字段：只保留 24h 累计降雨强度的四个互斥情景。
+RAIN_KEYS = ("dry", "light", "moderate", "heavy")
 
 
 def natural_key(path: Path) -> list[object]:
@@ -104,18 +101,13 @@ def rainfall_metrics(values: np.ndarray) -> dict[str, float]:
 
 
 def category_flags(metrics: dict[str, float]) -> dict[str, int]:
-    """把连续降雨指标转成多个降雨情景标签。"""
+    """把 24h 累计降雨量转成四个互斥强度情景标签。"""
     total = metrics["rain_total"]
-    max6h = metrics["rain_max6h"]
     return {
         "dry": int(total < 1.0),
         "light": int(1.0 <= total < 10.0),
         "moderate": int(10.0 <= total < 25.0),
         "heavy": int(total >= 25.0),
-        "strong_6h": int(max6h >= 10.0),
-        "persistent_wet": int(metrics["rain_hours"] >= 12),
-        "dry_to_wet": int(metrics["rain_in12"] < 1.0 and metrics["rain_out12"] >= 5.0),
-        "wet_to_dry": int(metrics["rain_in12"] >= 5.0 and metrics["rain_out12"] < 1.0),
     }
 
 

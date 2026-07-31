@@ -1,9 +1,0 @@
-einops
-fvcore
-numpy==1.26.4
-opencv-python
-pftools
-timm<=0.6.11,>=0.5.4
-torch>=2.0
-torchvision
-tqdm
