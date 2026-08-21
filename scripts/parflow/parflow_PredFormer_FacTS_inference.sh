@@ -1,43 +1,28 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
-# Example inference script for a trained ParFlow PredFormer checkpoint.
-# Edit the configuration block below before running on a new machine.
+# Modify PROJECT_ROOT when this repository is placed in a different directory.
+PROJECT_ROOT=/home/huanghui/data/ParFlow-transformer
+export CUDA_VISIBLE_DEVICES=0
 
-# ===================== User configuration =====================
-PROJECT_ROOT=${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+cd ${PROJECT_ROOT}
+export PYTHONPATH=${PROJECT_ROOT}:$PYTHONPATH
 
-# GPU selection. Set CUDA_VISIBLE_DEVICES before running if needed.
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
-
-# Trained experiment directory and checkpoint file.
-RUN_DIR=${RUN_DIR:-"$PROJECT_ROOT/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS"}
-CHECKPOINT_FILE=${CHECKPOINT_FILE:-latest_state_dict.pth}
-
-# Input data and output directory.
-DATA_ROOT=${DATA_ROOT:-"$PROJECT_ROOT/data/parflow/normal_data"}
-OUTPUT_DIR=${OUTPUT_DIR:-"$PROJECT_ROOT/inference_data/example_press"}
-RUN_NAME=${RUN_NAME:-example_rollout12h}
-
-# Inference period and rollout settings.
-START_HOUR=${START_HOUR:-20190000}
-END_HOUR=${END_HOUR:-20190035}
-ROLLOUT_HOURS=${ROLLOUT_HOURS:-12}
-PATCH_BATCH_SIZE=${PATCH_BATCH_SIZE:-4}
-# ==============================================================
-
-cd "$PROJECT_ROOT"
-export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+# Main paths to modify for a new inference run:
+#   --run-dir: trained experiment directory containing model_param.json and checkpoints/.
+#   --checkpoint-file: checkpoint file name under --run-dir/checkpoints/.
+#   --data-root: ParFlow-CLM data root used as inference input.
+#   --output-dir: directory for predicted pressure-head PFB files.
 
 python -m model_deployment.inference \
-    --run-dir "$RUN_DIR" \
-    --checkpoint-file "$CHECKPOINT_FILE" \
-    --data-root "$DATA_ROOT" \
-    --output-dir "$OUTPUT_DIR" \
-    --run-name "$RUN_NAME" \
-    --start-hour "$START_HOUR" \
-    --end-hour "$END_HOUR" \
-    --rollout-hours "$ROLLOUT_HOURS" \
-    --patch-batch-size "$PATCH_BATCH_SIZE" \
+    --run-dir ${PROJECT_ROOT}/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS \
+    --checkpoint-file latest_state_dict.pth \
+    --data-root ${PROJECT_ROOT}/data/parflow/normal_data \
+    --output-dir ${PROJECT_ROOT}/inference_data/example_press \
+    --run-name example_rollout12h \
+    --start-hour 20190000 \
+    --end-hour 20190035 \
+    --rollout-hours 12 \
+    --patch-batch-size 4 \
     --use-rollout \
     --use-amp
