@@ -1,33 +1,33 @@
 #!/bin/bash
 set -euo pipefail
 
-# sbatch /home/huanghui/data/ParFlow-transformer/slurm/parflow_inference.sh
+# Example inference script for a trained ParFlow PredFormer checkpoint.
+# Edit the configuration block below before running on a new machine.
 
-# ===================== 用户配置区 =====================
-REPO=/home/huanghui/data/ParFlow-transformer
+# ===================== User configuration =====================
+PROJECT_ROOT=${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 
+# GPU selection. Set CUDA_VISIBLE_DEVICES before running if needed.
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
-# 选择使用的单张 GPU。
-export CUDA_VISIBLE_DEVICES=1
+# Trained experiment directory and checkpoint file.
+RUN_DIR=${RUN_DIR:-"$PROJECT_ROOT/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS"}
+CHECKPOINT_FILE=${CHECKPOINT_FILE:-latest_state_dict.pth}
 
-# 需要推理的训练结果目录。
-RUN_DIR=/home/huanghui/data/ParFlow-transformer/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS
-CHECKPOINT_FILE=latest.pth
+# Input data and output directory.
+DATA_ROOT=${DATA_ROOT:-"$PROJECT_ROOT/data/parflow/normal_data"}
+OUTPUT_DIR=${OUTPUT_DIR:-"$PROJECT_ROOT/inference_data/example_press"}
+RUN_NAME=${RUN_NAME:-example_rollout12h}
 
-# 推理数据和输出目录。
-DATA_ROOT=/home/huanghui/data/ParFlow-transformer/data/parflow/normal_data
-OUTPUT_DIR=/home/huanghui/data/ParFlow-transformer/inference_data/press
-RUN_NAME="test1_2021_press_evap_static_train1_19_20_post_k3_cnn3_p8"
+# Inference period and rollout settings.
+START_HOUR=${START_HOUR:-20190000}
+END_HOUR=${END_HOUR:-20190035}
+ROLLOUT_HOURS=${ROLLOUT_HOURS:-12}
+PATCH_BATCH_SIZE=${PATCH_BATCH_SIZE:-4}
+# ==============================================================
 
-# 推理时间范围和 rollout 设置。
-START_HOUR=20210000
-END_HOUR=20218759
-ROLLOUT_HOURS=720
-PATCH_BATCH_SIZE=28
-# =====================================================
-
-cd "$REPO"
-export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+cd "$PROJECT_ROOT"
+export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 python -m model_deployment.inference \
     --run-dir "$RUN_DIR" \
