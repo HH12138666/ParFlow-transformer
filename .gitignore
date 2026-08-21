@@ -8,8 +8,6 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-data/ParFlow-transformer/model_deployment/inference_onestep_12h.py
-
 
 # Editor and system files
 *.swp
@@ -22,7 +20,7 @@ data/ParFlow-transformer/model_deployment/inference_onestep_12h.py
 *.err
 *.log
 
-# Large model/data artifacts
+# Large model/data artifacts are ignored by default.
 *.pfb
 *.pth
 *.pt
@@ -35,15 +33,15 @@ data/ParFlow-transformer/model_deployment/inference_onestep_12h.py
 *.h5
 *.hdf5
 
-# Local generated outputs
-/work_dirs/
+# Local generated outputs are ignored by default.
+/work_dirs/**
 /inference_data/
 /result_analyze/
 /paper_figures/
-/stats/
+/stats/**
 /slurm/
 
-# Keep data as an empty directory template only
+# Keep data as an empty directory template by default.
 /data/**
 !/data/
 !/data/.gitkeep
@@ -53,14 +51,43 @@ data/ParFlow-transformer/model_deployment/inference_onestep_12h.py
 !/data/parflow/normal_data/.gitkeep
 !/data/parflow/normal_data/press/
 !/data/parflow/normal_data/press/.gitkeep
+!/data/parflow/normal_data/press/2019/
+!/data/parflow/normal_data/press/2019/press_2019000*.pfb
+!/data/parflow/normal_data/press/2019/press_2019001*.pfb
+!/data/parflow/normal_data/press/2019/press_2019002*.pfb
+!/data/parflow/normal_data/press/2019/press_2019003[0-5].pfb
 !/data/parflow/normal_data/evaptrans/
 !/data/parflow/normal_data/evaptrans/.gitkeep
+!/data/parflow/normal_data/evaptrans/2019/
+!/data/parflow/normal_data/evaptrans/2019/evaptrans_2019000[1-9].pfb
+!/data/parflow/normal_data/evaptrans/2019/evaptrans_2019001*.pfb
+!/data/parflow/normal_data/evaptrans/2019/evaptrans_2019002*.pfb
+!/data/parflow/normal_data/evaptrans/2019/evaptrans_2019003[0-6].pfb
 !/data/parflow/normal_data/static/
 !/data/parflow/normal_data/static/.gitkeep
+!/data/parflow/normal_data/static/static.pfb
 !/data/parflow/extra_data_index/
 !/data/parflow/extra_data_index/.gitkeep
 
-# Keep only the basic train and inference example scripts
+# Keep only the stats file needed by the smoke-test scripts.
+!/stats/
+!/stats/stats1_press_evap_static_2019_2020.npz
+
+# Keep one lightweight checkpoint folder for inference smoke testing.
+!/work_dirs/
+!/work_dirs/ParFlow_press/
+!/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS/
+!/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS/model_param.json
+!/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS/checkpoints/
+!/work_dirs/ParFlow_press/2026-07-11-18-00_FACTS/checkpoints/latest_state_dict.pth
+
+# Keep only the basic train and inference example scripts.
 /scripts/parflow/*.sh
 !/scripts/parflow/parflow_PredFormer_FacTS_train.sh
 !/scripts/parflow/parflow_PredFormer_FacTS_inference.sh
+
+# Local packaging helper not needed for the paper-code release.
+/tools/zip_apcp_extra_data_2020_2021.sh
+
+# One-step inference helper is retained locally but not included in the paper-code release.
+/model_deployment/inference_onestep_12h.py
