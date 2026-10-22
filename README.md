@@ -1,10 +1,11 @@
-# Systematic Evaluation of a Transformer-Based Surrogate for Distributed Groundwater Dynamics: Long-Horizon Prediction, Dynamic-Static Fusion, and Data Augmentation
+# A Transformer-Based Surrogate for Distributed Groundwater Dynamics with Zero-Shot Cross-Basin Transfer and Precipitation-Regime Data Augmentation
 
 Chen Yang <yangch329@mail.sysu.edu.cn>  
 Hui Huang <huangh573@mail2.sysu.edu.cn>
 
 This repository contains the source code for the PredFormer-based groundwater surrogate model used in the manuscript. The model emulates ParFlow-CLM pressure-head dynamics, and water table depth (WTD) is diagnosed from the predicted pressure-head fields for evaluation.
 
+The source region is the upper Beijiang River basin (UBRB). Zero-shot evaluation applies the same trained model and UBRB normalization statistics to Hejiang WY2021, without target-basin training or fine-tuning. PME is prescribed offline; these experiments are not online CLM coupling.
 
 
 ## Environment Setup
@@ -44,4 +45,16 @@ Run inference:
 bash scripts/parflow/parflow_PredFormer_FacTS_inference.sh
 ```
 
-Before running, edit the paths and options at the top of each script. The training script also contains notes for enabling extra-data training.
+Run the Hejiang zero-shot experiment after downloading its data:
+
+```bash
+bash scripts/parflow/parflow_PredFormer_zero_shot_inference.sh
+```
+
+Before running, edit the paths and options at the top of each script. The training script also contains notes for enabling extra-data training. The bundled 36-hour data are only a smoke test, not the full manuscript experiment.
+
+## Data and Figure Reproduction
+
+The ordinary UBRB simulation data are available at [ScienceDB](https://doi.org/10.57760/sciencedb.46348). Supporting WTD outputs, Hejiang data, augmentation manifests, checkpoints, normalization files, and figure/table scripts are distributed separately in the manuscript data package. Follow its root README for the current figure numbering and extraction layout; large archives and local analyses are not added to this code repository.
+
+The surrogate predicts ten-layer pressure head. The paper's WTD diagnosis also uses the corresponding reference saturation; it is not a separately predicted surrogate variable. The evaluation takes the absolute difference at each grid cell before spatial averaging. Cross-basin tiled inference retains the target grid geometry and does not resize Hejiang to the UBRB domain.

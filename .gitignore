@@ -85,6 +85,7 @@ dist/
 /scripts/parflow/*.sh
 !/scripts/parflow/parflow_PredFormer_FacTS_train.sh
 !/scripts/parflow/parflow_PredFormer_FacTS_inference.sh
+!/scripts/parflow/parflow_PredFormer_zero_shot_inference.sh
 
 # Local packaging helper not needed for the paper-code release.
 /tools/zip_apcp_extra_data_2020_2021.sh

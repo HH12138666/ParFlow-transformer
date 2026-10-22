@@ -208,6 +208,13 @@ def validate_config(spec, sources):
     expected_w = int(require_model_key(cfg, "width"))
     if expected_in != sources.c_in:
         raise ValueError(f"Input C mismatch: model={expected_in}, data={sources.c_in}")
+    window = (cfg.get("space_h"), cfg.get("space_w"))
+    if any(value is not None for value in window):
+        if any(value is None or int(value) <= 0 for value in window):
+            raise ValueError("space_h and space_w must both be positive for tiled inference")
+        if int(window[0]) > sources.height or int(window[1]) > sources.width:
+            raise ValueError(f"Window {window} exceeds data size {(sources.height, sources.width)}")
+        return
     if expected_h != sources.height or expected_w != sources.width:
         raise ValueError(f"Spatial size mismatch: model=({expected_h},{expected_w}), data=({sources.height},{sources.width})")
 

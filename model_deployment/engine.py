@@ -1,4 +1,5 @@
 import time
+import struct
 from datetime import datetime
 from pathlib import Path
 
@@ -35,8 +36,11 @@ def predict_full_block(model, x, coords, spec, sources, config, timing, block):
         sync_cuda()
         timing.forward_time += time.perf_counter() - forward_start
         stitch_predictions(pred.float().cpu().numpy(), pred_full, counts, chunk)
-    mask = counts > 0
-    pred_full[mask] = pred_full[mask] / counts[mask]
+    if np.any(counts == 0):
+        raise ValueError("Spatial windows left uncovered cells; refusing zero-filled predictions")
+    pred_full /= counts
+    if not np.isfinite(pred_full).all():
+        raise FloatingPointError("Nonfinite stitched pressure predictions; no clipping or replacement applied")
     return pred_full
 
 
@@ -79,6 +83,12 @@ def build_next_input(pred_frame, hour_idx, sources, spec, aux_map, out_channels,
     return frame
 
 
+def pfb_grid(path):
+    with Path(path).open("rb") as stream:
+        header = struct.unpack(">3d3i3di", stream.read(64))
+    return dict(zip(("x", "y", "z", "dx", "dy", "dz"), header[:3]+header[6:9]))
+
+
 def write_prediction_block(pred_full, t0, predicted, block, out_dir, sources, out_channels, timing):
     write_start = time.perf_counter()
     for k in range(block):
@@ -87,7 +97,12 @@ def write_prediction_block(pred_full, t0, predicted, block, out_dir, sources, ou
         out_path = out_dir / rel.parent / f"pred_{rel.name}"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         arr = pred_full[k][:out_channels].astype(np.float64)
-        write_pfb(str(out_path), arr[0] if arr.shape[0] == 1 else arr, dist=False)
+        if not np.isfinite(arr).all():
+            raise FloatingPointError(f"Nonfinite physical pressure at {sources.hours[idx]}")
+        temporary = out_path.with_suffix(".pfb.tmp")
+        write_pfb(str(temporary), arr[0] if arr.shape[0] == 1 else arr, dist=False,
+                  **pfb_grid(sources.files[idx]))
+        temporary.replace(out_path)
     timing.write_time += time.perf_counter() - write_start
     timing.output_count += block
 
