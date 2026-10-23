@@ -55,6 +55,13 @@ Before running, edit the paths and options at the top of each script. The traini
 
 ## Data and Figure Reproduction
 
-The ordinary UBRB simulation data are available at [ScienceDB](https://doi.org/10.57760/sciencedb.46348). Supporting WTD outputs, Hejiang data, augmentation manifests, checkpoints, normalization files, and figure/table scripts are distributed separately in the manuscript data package. Follow its root README for the current figure numbering and extraction layout; large archives and local analyses are not added to this code repository.
+The study uses two complementary ScienceDB datasets:
+
+| Dataset | Contents | DOI |
+|---|---|---|
+| Ordinary UBRB simulations | Unperturbed ParFlow-CLM simulations used to construct the baseline surrogate-model dataset. | <https://doi.org/10.57760/sciencedb.46348> |
+| Supporting data for this study | Precipitation-perturbed simulations, Hejiang reference simulations and model predictions, augmentation manifests, trained checkpoints, normalization files, and figure/table scripts and source data. | <https://doi.org/10.57760/sciencedb.0106u> |
+
+The ordinary UBRB training fields are not duplicated in the supporting dataset. Follow the supporting dataset's root README for the current figure numbering and extraction layout; large archives and local analyses are not added to this code repository.
 
 The surrogate predicts ten-layer pressure head. The paper's WTD diagnosis also uses the corresponding reference saturation; it is not a separately predicted surrogate variable. The evaluation takes the absolute difference at each grid cell before spatial averaging. Cross-basin tiled inference retains the target grid geometry and does not resize Hejiang to the UBRB domain.
